@@ -1,0 +1,49 @@
+# GCP Service Account Keys (Credentials)
+*gcp-service-account*.json
+airflow/config/gcp-service-account.json
+
+# Environment files
+.env
+.env.*
+
+# Python caches and virtualenvs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Airflow runtime files
+airflow/logs/
+airflow/postgres-db-volume/
+
+# IDE files
+.vscode/
+.idea/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Node.js / Frontend
+node_modules/
+.npm/
+package-lock.json
+
+# Build & Release Artifacts
+dist/
+build/
+out/
+*.egg-info/
+.eggs/
+
+# Temp files
+*.log
+*.tmp
+*.temp
+*~
+.DS_Store
+Thumbs.db
