@@ -8,12 +8,10 @@ import {
   Terminal, 
   ShieldAlert, 
   Play, 
-  Check, 
   X, 
   RefreshCw, 
   UserCheck, 
   Server, 
-  ArrowRight, 
   AlertCircle
 } from 'lucide-react';
 
@@ -35,13 +33,42 @@ interface LogLine {
   text: string;
 }
 
+interface NodeDetails {
+  source?: string;
+  path?: string;
+  primaryKey?: string;
+  freshnessSla?: string | null;
+  schema?: Record<string, string>;
+  description?: string;
+  rule?: string;
+  nullTolerance?: string;
+  range?: string;
+  referentialChecks?: string;
+  targetTable?: string;
+  partitionBy?: string;
+  clusterBy?: string;
+  mode?: string;
+  query?: string;
+  activeRules?: string;
+}
+
+interface PipelineNode {
+  id: string;
+  title: string;
+  subtitle: string;
+  type: 'input' | 'ingest' | 'validate' | 'load' | 'check' | 'monitor';
+  details: NodeDetails;
+}
+
 function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'incidents' | 'logs'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'logs' | 'remediations' | 'stats'>('logs');
+  const [telemetryOpen, setTelemetryOpen] = useState(true);
   const [pipelineStatus, setPipelineStatus] = useState<'healthy' | 'anomaly' | 'failed'>('healthy');
   const [activeFault, setActiveFault] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState<string | null>(null);
-
-  // Sample data to start with
+  const [activeNode, setActiveNode] = useState<string>('ingest_orders');
+  
+  // Incidents state
   const [incidents, setIncidents] = useState<Incident[]>([
     {
       id: "inc-1092",
@@ -56,13 +83,15 @@ function App() {
     }
   ]);
 
+  // Past Remediations
   const [remediations, setRemediations] = useState([
     { id: "rem-091", time: "2026-08-20 10:15:00", fault: "Duplicate Ingestion", target: "fct_orders", method: "Idempotent MERGE", duration: "4.2s", status: "success" },
     { id: "rem-085", time: "2026-08-19 14:02:18", fault: "Staleness Warning", target: "fct_events", method: "Sensor Recrawl", duration: "8.5s", status: "success" }
   ]);
 
+  // Console Logs
   const [consoleLogs, setConsoleLogs] = useState<LogLine[]>([
-    { time: "17:56:01", level: "info", text: "Airflow LocalExecutor initialized." },
+    { time: "17:56:01", level: "info", text: "Airflow LocalExecutor initialized successfully." },
     { time: "17:56:03", level: "success", text: "Connected to local metadata database (Postgres 15)." },
     { time: "17:56:05", level: "info", text: "DAG 'self_healing_pipeline' scheduled for daily runs (02:00 UTC)." },
     { time: "17:56:10", level: "info", text: "Ingestion agent listening for task callbacks..." }
@@ -76,14 +105,174 @@ function App() {
     { day: "08-17", count: 285, status: "healthy" },
     { day: "08-18", count: 300, status: "healthy" },
     { day: "08-19", count: 305, status: "healthy" },
-    { day: "08-20", count: 1450, status: "anomaly" } // Ingested today's spike
+    { day: "08-20", count: 1450, status: "anomaly" } 
   ];
+
+  // Pipeline stages definitions
+  const pipelineNodes: PipelineNode[] = [
+    {
+      id: "source_customers",
+      title: "customers.csv",
+      subtitle: "Dimension Raw Source",
+      type: "input",
+      details: {
+        source: "CSV Upload",
+        path: "data/customers.csv",
+        primaryKey: "customer_id",
+        freshnessSla: "None (Static Load)",
+        schema: {
+          customer_id: "string",
+          name: "string",
+          email: "string",
+          region: "string",
+          signup_date: "date"
+        }
+      }
+    },
+    {
+      id: "source_products",
+      title: "products.csv",
+      subtitle: "Dimension Raw Source",
+      type: "input",
+      details: {
+        source: "CSV Upload",
+        path: "data/products.csv",
+        primaryKey: "product_id",
+        freshnessSla: "None (Static Load)",
+        schema: {
+          product_id: "string",
+          name: "string",
+          category: "string",
+          price: "float"
+        }
+      }
+    },
+    {
+      id: "ingest_orders",
+      title: "Ingest Orders",
+      subtitle: "Task: python_callable",
+      type: "ingest",
+      details: {
+        description: "Ingests the daily orders batch file from the source storage directory.",
+        path: "data/orders/orders_{date}.csv",
+        primaryKey: "order_id",
+        freshnessSla: "Max 26 Hours"
+      }
+    },
+    {
+      id: "ingest_events",
+      title: "Ingest Events",
+      subtitle: "Task: python_callable",
+      type: "ingest",
+      details: {
+        description: "Pulls clickstream events logs via mock api stream and stores them locally.",
+        path: "data/events/events_{date}.jsonl",
+        primaryKey: "event_id",
+        freshnessSla: "Max 6 Hours"
+      }
+    },
+    {
+      id: "validate_schema",
+      title: "Validate Schema",
+      subtitle: "Task: python_callable",
+      type: "validate",
+      details: {
+        description: "Compares current staged orders and events schemas against configuration.",
+        rule: "Strict type mapping schema audits. Raises error on drift.",
+        activeRules: "customers schema, products schema, orders schema, events schema"
+      }
+    },
+    {
+      id: "validate_quality",
+      title: "Validate Quality",
+      subtitle: "Task: python_callable",
+      type: "validate",
+      details: {
+        description: "Validates null rules, row range thresholds, and referential constraints.",
+        nullTolerance: "order_total: 2.0%, customer_id: 0.0%",
+        range: "orders: 240 - 360 rows/day | events: 900 - 1500 rows/day",
+        referentialChecks: "orders.customer_id -> customers.customer_id, events.customer_id -> customers.customer_id"
+      }
+    },
+    {
+      id: "load_orders_bq",
+      title: "Load Orders to BQ",
+      subtitle: "Task: BigQueryInsertJob",
+      type: "load",
+      details: {
+        targetTable: "fct_orders",
+        partitionBy: "order_ts (DAY)",
+        clusterBy: "customer_id",
+        mode: "WRITE_TRUNCATE (idempotency safety check)"
+      }
+    },
+    {
+      id: "bq_row_count_check",
+      title: "BQ Row Count Check",
+      subtitle: "Task: BigQueryCheck",
+      type: "check",
+      details: {
+        description: "Runs assertion query directly in BigQuery to verify daily row range constraints.",
+        query: "SELECT COUNT(*) BETWEEN 240 AND 360 FROM `fct_orders` WHERE DATE(order_ts) = '{{ ds }}'"
+      }
+    },
+    {
+      id: "agent_monitor",
+      title: "Agent Monitor",
+      subtitle: "Task: python_callable",
+      type: "monitor",
+      details: {
+        description: "Validates post-load properties and resolves active pipeline incidents.",
+        activeRules: "remediation_policy: duplicate_ingestion=auto_fix, volume_anomaly_spike=auto_fix"
+      }
+    }
+  ];
+
+  // Helper to get status of a node
+  const getNodeStatus = (nodeId: string): 'healthy' | 'warning' | 'failed' | 'idle' => {
+    if (pipelineStatus === 'healthy') {
+      // In healthy state, fct_orders volume spike (from starting incidents) is warning
+      if (nodeId === 'validate_quality' && incidents.some(i => i.status === 'pending_approval' && i.fault_category.includes("Volume"))) {
+        return 'warning';
+      }
+      return 'healthy';
+    }
+
+    if (activeFault === 'schema_drift') {
+      if (nodeId === 'validate_schema') return 'failed';
+      // Downstream nodes are idle because the run halted
+      const downstream = ['validate_quality', 'load_orders_bq', 'bq_row_count_check', 'agent_monitor'];
+      if (downstream.includes(nodeId)) return 'idle';
+      return 'healthy';
+    }
+
+    if (activeFault === 'null_spike') {
+      if (nodeId === 'validate_quality') return 'failed';
+      const downstream = ['load_orders_bq', 'bq_row_count_check', 'agent_monitor'];
+      if (downstream.includes(nodeId)) return 'idle';
+      return 'healthy';
+    }
+
+    if (activeFault === 'ref_break') {
+      if (nodeId === 'validate_quality') return 'failed';
+      const downstream = ['load_orders_bq', 'bq_row_count_check', 'agent_monitor'];
+      if (downstream.includes(nodeId)) return 'idle';
+      return 'healthy';
+    }
+
+    // Default fallbacks
+    if (nodeId === 'validate_quality' && incidents.some(i => i.status === 'pending_approval')) {
+      return 'warning';
+    }
+
+    return 'healthy';
+  };
 
   // Auto-scroll logs
   useEffect(() => {
     const el = document.getElementById('log-terminal');
     if (el) el.scrollTop = el.scrollHeight;
-  }, [consoleLogs]);
+  }, [consoleLogs, telemetryOpen]);
 
   // Push new log entry helper
   const addLog = (level: LogLine['level'], text: string) => {
@@ -93,10 +282,10 @@ function App() {
 
   // Inject a fault
   const handleInjectFault = (type: string) => {
-    if (activeFault) return; // one at a time
+    if (activeFault) return; 
 
     setActiveFault(type);
-    setPipelineStatus(type === 'schema_drift' || type === 'null_spike' ? 'failed' : 'anomaly');
+    setPipelineStatus(type === 'schema_drift' || type === 'null_spike' || type === 'ref_break' ? 'failed' : 'anomaly');
 
     let newIncident: Incident;
     
@@ -112,6 +301,7 @@ function App() {
         root_cause: "Upstream API modification without notification (price field formatting).",
         proposed_action: "Quarantine batch, create schema evolution log, and escalate alert."
       };
+      setActiveNode("validate_schema");
       addLog("error", "Task validate_schema failed! Schema drift detected in products.csv.");
       addLog("warn", "Field 'price' contains type mismatch (expected FLOAT, got STRING).");
       addLog("info", "Triggering AI Diagnostic Agent callback...");
@@ -127,6 +317,7 @@ function App() {
         root_cause: "Database extraction failure on client export.",
         proposed_action: "Halt transaction pipeline, quarantine table, and raise ticket."
       };
+      setActiveNode("validate_quality");
       addLog("error", "Task validate_quality failed! Null spike detected in orders_2026-08-20.csv.");
       addLog("info", "Running evidence collection... 42/290 rows contain null customer identifiers.");
     } else {
@@ -141,12 +332,14 @@ function App() {
         root_cause: "Stale dimensions sync in upstream source.",
         proposed_action: "Quarantine missing reference records, generate surrogate logs, and load clean rows."
       };
+      setActiveNode("validate_quality");
       addLog("warn", "Referential breakage check failed! Missing keys in dimension tables.");
       addLog("info", "AI Agent diagnostics: 3 orders missing corresponding customer keys.");
     }
 
     setIncidents(prev => [newIncident, ...prev]);
-    setActiveTab('incidents');
+    setTelemetryOpen(true);
+    setActiveTab('logs');
   };
 
   // Resolve / Approve incident
@@ -189,7 +382,6 @@ function App() {
           setIsProcessing(null);
           setActiveFault(null);
           setPipelineStatus('healthy');
-          setActiveTab('dashboard');
         }, 1000);
       }, 1000);
     }, 1000);
@@ -203,439 +395,585 @@ function App() {
     setPipelineStatus('healthy');
   };
 
+  // Find active node information
+  const selectedNodeInfo = pipelineNodes.find(n => n.id === activeNode);
+  const activeIncident = incidents.find(i => i.task_id === activeNode && i.status === 'pending_approval');
+
   return (
     <div className="app-container">
-      {/* Sidebar Navigation */}
+      {/* Qlik-Style Dark Sidebar */}
       <aside className="sidebar">
         <div className="top-part">
           <div className="logo-section">
-            <Activity className="logo-icon" size={24} />
-            <span className="logo-text">SelfHeal Agent</span>
+            <Activity className="logo-icon" size={20} />
+            <span className="logo-text">Qlik Flow</span>
           </div>
 
           <nav className="nav-links">
-            <div 
-              className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-            >
-              <Server size={18} />
-              Dashboard
+            <div className="nav-item active">
+              <Server size={16} />
+              Pipeline Canvas
             </div>
             <div 
-              className={`nav-item ${activeTab === 'incidents' ? 'active' : ''}`}
-              onClick={() => setActiveTab('incidents')}
+              className="nav-item" 
+              onClick={() => {
+                setTelemetryOpen(true); 
+                setActiveTab('stats');
+              }}
             >
-              <AlertTriangle size={18} />
-              Incidents 
-              {incidents.filter(i => i.status === 'pending_approval').length > 0 && (
-                <span style={{ 
-                  marginLeft: 'auto', 
-                  backgroundColor: 'var(--failed)', 
-                  color: '#000', 
-                  fontSize: '11px', 
-                  fontWeight: 'bold', 
-                  padding: '2px 6px', 
-                  borderRadius: '10px' 
-                }}>
-                  {incidents.filter(i => i.status === 'pending_approval').length}
-                </span>
-              )}
+              <Database size={16} />
+              Metrics & Volumes
             </div>
             <div 
-              className={`nav-item ${activeTab === 'logs' ? 'active' : ''}`}
-              onClick={() => setActiveTab('logs')}
+              className="nav-item"
+              onClick={() => {
+                setTelemetryOpen(true);
+                setActiveTab('remediations');
+              }}
             >
-              <Terminal size={18} />
-              Console Logs
+              <RefreshCw size={16} />
+              Remediations
             </div>
           </nav>
         </div>
 
         <div className="sidebar-footer">
-          <div>Cohort 2026 — Monorepo v1.0</div>
-          <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--accent)' }}>System Ready</div>
+          <div>Self-Healing Pipeline</div>
+          <div style={{ color: 'var(--accent)', marginTop: '2px', fontWeight: 600 }}>Active Workspace</div>
         </div>
       </aside>
 
-      {/* Main Panel Content */}
+      {/* Main Workspace Frame */}
       <main className="main-content">
-        
-        {/* Header Status Bar */}
+        {/* Header bar */}
         <header className="header">
           <div className="header-title">
-            <h1>Self-Healing Pipeline Monitor</h1>
-            <p>E2E Ingestion, Schema Audits & Agent Diagnostics Control Console</p>
+            <h1>Pipeline Diagnostics Canvas</h1>
+            <p>Visual orchestrator & self-healing controller</p>
           </div>
 
           <div className={`status-badge ${pipelineStatus === 'healthy' ? 'healthy' : pipelineStatus === 'anomaly' ? 'anomaly' : 'failed'}`}>
             <span className="pulse-dot"></span>
             {pipelineStatus === 'healthy' && 'Pipeline Healthy'}
-            {pipelineStatus === 'anomaly' && 'Anomaly Detected'}
+            {pipelineStatus === 'anomaly' && 'Anomaly Flagged'}
             {pipelineStatus === 'failed' && 'Task Failure'}
           </div>
         </header>
 
-        {/* METRICS COUNTER CARDS */}
-        <section className="metrics-grid">
-          <div className="metric-card">
-            <div className="metric-info">
-              <h3>Ingestion Success Rate</h3>
-              <p className="value">98.2%</p>
-            </div>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--healthy-glow)', color: 'var(--healthy)' }}>
-              <CheckCircle2 size={24} />
-            </div>
+        {/* Fault Injection Control Bar */}
+        <div className="workspace-toolbar">
+          <div className="toolbar-section">
+            <span className="toolbar-label">Simulation Engine</span>
+            <div className="toolbar-divider"></div>
+            <button 
+              className={`fault-pill ${activeFault === 'schema_drift' ? 'active' : ''}`}
+              onClick={() => handleInjectFault('schema_drift')}
+              disabled={activeFault !== null}
+            >
+              <Play size={12} />
+              Schema Drift
+            </button>
+            <button 
+              className={`fault-pill ${activeFault === 'null_spike' ? 'active' : ''}`}
+              onClick={() => handleInjectFault('null_spike')}
+              disabled={activeFault !== null}
+            >
+              <Play size={12} />
+              Null Spike
+            </button>
+            <button 
+              className={`fault-pill ${activeFault === 'ref_break' ? 'active' : ''}`}
+              onClick={() => handleInjectFault('ref_break')}
+              disabled={activeFault !== null}
+            >
+              <Play size={12} />
+              Referential Break
+            </button>
           </div>
 
-          <div className="metric-card">
-            <div className="metric-info">
-              <h3>Active Quarantines</h3>
-              <p className="value">{incidents.filter(i => i.status === 'pending_approval').length}</p>
-            </div>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--failed-glow)', color: 'var(--failed)' }}>
-              <ShieldAlert size={24} />
-            </div>
+          <div className="toolbar-section">
+            <button 
+              className="fault-pill" 
+              onClick={() => setTelemetryOpen(!telemetryOpen)}
+            >
+              <Terminal size={12} />
+              {telemetryOpen ? 'Hide Logs' : 'Show Logs'}
+            </button>
           </div>
+        </div>
 
-          <div className="metric-card">
-            <div className="metric-info">
-              <h3>Resolved Anomaly Loops</h3>
-              <p className="value">{remediations.length}</p>
-            </div>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--accent-glow)', color: 'var(--accent)' }}>
-              <RefreshCw size={24} />
-            </div>
-          </div>
-
-          <div className="metric-card">
-            <div className="metric-info">
-              <h3>BigQuery Dataset Size</h3>
-              <p className="value">14.8 MB</p>
-            </div>
-            <div className="metric-icon-box" style={{ backgroundColor: 'var(--info-glow)', color: 'var(--info)' }}>
-              <Database size={24} />
-            </div>
-          </div>
-        </section>
-
-        {activeTab === 'dashboard' && (
-          <div className="dashboard-grid">
+        {/* Workspace Canvas (Dotted Grid) */}
+        <div className="canvas-workspace">
+          <div className="pipeline-flow">
             
-            {/* Left Panel: Statistics and Ingestion Volumes */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Column 1: Sources */}
+            <div className="flow-column">
+              <div className="flow-link-label" style={{ top: '-14px' }}>Data Sources</div>
               
-              <div className="section-card">
-                <div className="section-header">
-                  <h2><Activity size={18} /> Ingested Volumes (7-Day History)</h2>
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Fact Table rows / daily batch</span>
+              <div 
+                className={`node-card info ${activeNode === 'source_customers' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('source_customers')}
+              >
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><Database size={14} /></div>
+                  <div className="node-status-dot"></div>
                 </div>
-                
-                {/* SVG Column Chart */}
-                <div className="chart-container">
-                  {volumeData.map((item, index) => (
-                    <div className="chart-bar-wrapper" key={index}>
-                      <div 
-                        className="chart-bar" 
-                        style={{ 
-                          height: `${Math.min(180, (item.count / 1500) * 160 + 10)}px`,
-                          background: item.status === 'anomaly' 
-                            ? 'linear-gradient(180deg, var(--failed) 0%, rgba(239, 68, 68, 0.2) 100%)' 
-                            : 'linear-gradient(180deg, var(--accent) 0%, rgba(192, 132, 252, 0.2) 100%)'
-                        }}
-                      >
-                        <div className="chart-bar-tooltip">
-                          {item.count} rows ({item.status})
-                        </div>
-                      </div>
-                      <span className="chart-label">{item.day}</span>
-                    </div>
-                  ))}
-                </div>
+                <h3 className="node-title">customers.csv</h3>
+                <p className="node-subtitle">Staged Dimensions</p>
               </div>
 
-              {/* Data quality and schemas validation status table */}
-              <div className="section-card">
-                <div className="section-header">
-                  <h2><FileCode2 size={18} /> BigQuery Database Schema Registry</h2>
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>pipeline_config.yaml verification</span>
+              <div 
+                className={`node-card info ${activeNode === 'source_products' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('source_products')}
+              >
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><Database size={14} /></div>
+                  <div className="node-status-dot"></div>
                 </div>
-                
-                <div className="table-wrapper">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Target Table</th>
-                        <th>Format</th>
-                        <th>Keys Check</th>
-                        <th>Freshness SLA</th>
-                        <th>Verification Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td><code>dim_customers</code></td>
-                        <td>CSV (Staging)</td>
-                        <td><code>customer_id</code> (PK)</td>
-                        <td>None (Dimension)</td>
-                        <td><span style={{ color: 'var(--healthy)', fontWeight: 600 }}>Active / Healthy</span></td>
-                      </tr>
-                      <tr>
-                        <td><code>dim_products</code></td>
-                        <td>CSV (Staging)</td>
-                        <td><code>product_id</code> (PK)</td>
-                        <td>None (Dimension)</td>
-                        <td>
-                          {activeFault === 'schema_drift' ? (
-                            <span style={{ color: 'var(--failed)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <AlertCircle size={14} /> Drifted Type
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--healthy)', fontWeight: 600 }}>Active / Healthy</span>
-                          )}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td><code>fct_orders</code></td>
-                        <td>CSV Batch (Staged)</td>
-                        <td><code>customer_id</code> (FK)</td>
-                        <td>Max 26 hours</td>
-                        <td>
-                          {activeFault === 'null_spike' ? (
-                            <span style={{ color: 'var(--failed)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <AlertCircle size={14} /> Null Spike Anomaly
-                            </span>
-                          ) : pipelineStatus === 'anomaly' ? (
-                            <span style={{ color: 'var(--warning)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <AlertCircle size={14} /> Spike warning
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--healthy)', fontWeight: 600 }}>Active / Healthy</span>
-                          )}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td><code>fct_events</code></td>
-                        <td>JSONL Stream</td>
-                        <td><code>event_id</code> (PK)</td>
-                        <td>Max 6 hours</td>
-                        <td><span style={{ color: 'var(--healthy)', fontWeight: 600 }}>Active / Healthy</span></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                <h3 className="node-title">products.csv</h3>
+                <p className="node-subtitle">Staged Dimensions</p>
               </div>
             </div>
 
-            {/* Right Panel: Controls & Remediation Log */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              
-              {/* Fault Injection Panel */}
-              <div className="section-card">
-                <div className="section-header">
-                  <h2><Play size={18} /> Fault Injection Simulator</h2>
-                </div>
-                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                  Inject sample errors into the staged datasets to evaluate the AI Agent's self-healing triggers and diagnostics.
-                </p>
+            {/* Column 2: Ingestion */}
+            <div className="flow-column">
+              <div className="flow-link-label" style={{ top: '-14px' }}>Ingestion</div>
 
-                <div className="fault-injector-grid">
-                  <button 
-                    className={`fault-btn ${activeFault === 'schema_drift' ? 'active' : ''}`}
-                    onClick={() => handleInjectFault('schema_drift')}
-                    disabled={activeFault !== null}
-                  >
-                    <span>Inject Schema Drift (products.csv)</span>
-                    <ArrowRight size={16} />
-                  </button>
-                  <button 
-                    className={`fault-btn ${activeFault === 'null_spike' ? 'active' : ''}`}
-                    onClick={() => handleInjectFault('null_spike')}
-                    disabled={activeFault !== null}
-                  >
-                    <span>Inject Null Spike (orders.csv)</span>
-                    <ArrowRight size={16} />
-                  </button>
-                  <button 
-                    className={`fault-btn ${activeFault === 'ref_break' ? 'active' : ''}`}
-                    onClick={() => handleInjectFault('ref_break')}
-                    disabled={activeFault !== null}
-                  >
-                    <span>Inject Referential Breakage</span>
-                    <ArrowRight size={16} />
-                  </button>
+              <div 
+                className={`node-card ${getNodeStatus('ingest_orders')} ${activeNode === 'ingest_orders' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('ingest_orders')}
+              >
+                <div className="node-connector input"></div>
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><Server size={14} /></div>
+                  <div className="node-status-dot"></div>
                 </div>
+                <h3 className="node-title">Ingest Orders</h3>
+                <p className="node-subtitle">orders_{`{date}`}.csv</p>
               </div>
 
-              {/* Remediation Loops History Log */}
-              <div className="section-card">
-                <div className="section-header">
-                  <h2><RefreshCw size={18} /> Remediation Log</h2>
+              <div 
+                className={`node-card ${getNodeStatus('ingest_events')} ${activeNode === 'ingest_events' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('ingest_events')}
+              >
+                <div className="node-connector input"></div>
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><Server size={14} /></div>
+                  <div className="node-status-dot"></div>
                 </div>
-                
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {remediations.map((rem, idx) => (
-                    <div 
-                      key={idx} 
-                      style={{ 
-                        borderLeft: '3px solid var(--healthy)', 
-                        paddingLeft: '12px',
-                        fontSize: '13px'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                        <span style={{ fontWeight: 600 }}>{rem.fault} Auto-Fix</span>
-                        <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{rem.duration}</span>
-                      </div>
-                      <div style={{ color: 'var(--text-secondary)' }}>
-                        Target: <code>{rem.target}</code> | Method: {rem.method}
-                      </div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
-                        Timestamp: {rem.time}
-                      </div>
-                    </div>
-                  ))}
+                <h3 className="node-title">Ingest Events</h3>
+                <p className="node-subtitle">events_{`{date}`}.jsonl</p>
+              </div>
+            </div>
+
+            {/* Column 3: Quality Audits */}
+            <div className="flow-column">
+              <div className="flow-link-label" style={{ top: '-14px' }}>Quality Audits</div>
+
+              <div 
+                className={`node-card ${getNodeStatus('validate_schema')} ${activeNode === 'validate_schema' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('validate_schema')}
+              >
+                <div className="node-connector input"></div>
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><FileCode2 size={14} /></div>
+                  <div className="node-status-dot"></div>
                 </div>
+                <h3 className="node-title">Validate Schema</h3>
+                <p className="node-subtitle">Structure Checks</p>
               </div>
 
+              <div 
+                className={`node-card ${getNodeStatus('validate_quality')} ${activeNode === 'validate_quality' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('validate_quality')}
+              >
+                <div className="node-connector input"></div>
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><AlertTriangle size={14} /></div>
+                  <div className="node-status-dot"></div>
+                </div>
+                <h3 className="node-title">Validate Quality</h3>
+                <p className="node-subtitle">Values & Null Audits</p>
+              </div>
+            </div>
+
+            {/* Column 4: Warehouse Load */}
+            <div className="flow-column">
+              <div className="flow-link-label" style={{ top: '-14px' }}>Storage</div>
+
+              <div 
+                className={`node-card ${getNodeStatus('load_orders_bq')} ${activeNode === 'load_orders_bq' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('load_orders_bq')}
+              >
+                <div className="node-connector input"></div>
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><Database size={14} /></div>
+                  <div className="node-status-dot"></div>
+                </div>
+                <h3 className="node-title">Load Orders BQ</h3>
+                <p className="node-subtitle">BigQuery Load</p>
+              </div>
+            </div>
+
+            {/* Column 5: Post-Load check */}
+            <div className="flow-column">
+              <div className="flow-link-label" style={{ top: '-14px' }}>Assertions</div>
+
+              <div 
+                className={`node-card ${getNodeStatus('bq_row_count_check')} ${activeNode === 'bq_row_count_check' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('bq_row_count_check')}
+              >
+                <div className="node-connector input"></div>
+                <div className="node-connector output"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><CheckCircle2 size={14} /></div>
+                  <div className="node-status-dot"></div>
+                </div>
+                <h3 className="node-title">Row Count Check</h3>
+                <p className="node-subtitle">Declarative SQL</p>
+              </div>
+            </div>
+
+            {/* Column 6: Diagnostics */}
+            <div className="flow-column">
+              <div className="flow-link-label" style={{ top: '-14px' }}>Agent</div>
+
+              <div 
+                className={`node-card ${getNodeStatus('agent_monitor')} ${activeNode === 'agent_monitor' ? 'selected' : ''}`}
+                onClick={() => setActiveNode('agent_monitor')}
+              >
+                <div className="node-connector input"></div>
+                <div className="node-header">
+                  <div className="node-icon-wrapper"><Activity size={14} /></div>
+                  <div className="node-status-dot"></div>
+                </div>
+                <h3 className="node-title">Agent Monitor</h3>
+                <p className="node-subtitle">Remediation Loop</p>
+              </div>
             </div>
 
           </div>
-        )}
+        </div>
 
-        {/* Tab 2: Incidents List */}
-        {activeTab === 'incidents' && (
-          <div className="section-card" style={{ minHeight: '400px' }}>
-            <div className="section-header">
-              <h2><AlertTriangle size={18} /> Active Quarantines & Escalations</h2>
-            </div>
-            
-            {incidents.filter(i => i.status === 'pending_approval').length === 0 ? (
-              <div style={{ 
-                display: 'flex', 
-                flexDirection: 'column', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                padding: '80px 0',
-                color: 'var(--text-secondary)'
-              }}>
-                <CheckCircle2 size={48} style={{ color: 'var(--healthy)', marginBottom: '16px' }} />
-                <h3>No Outstanding Incidents</h3>
-                <p style={{ fontSize: '13px' }}>The data pipeline is executing cleanly. Check back if a fault occurs.</p>
+        {/* Right side slide-over Configuration Inspector */}
+        {selectedNodeInfo && (
+          <aside className={`inspector-panel ${selectedNodeInfo ? 'open' : ''}`}>
+            <div className="inspector-header">
+              <div className="inspector-title-area">
+                <h2>{selectedNodeInfo.title}</h2>
+                <p>{selectedNodeInfo.subtitle}</p>
               </div>
-            ) : (
-              incidents.filter(i => i.status === 'pending_approval').map((inc, idx) => (
-                <div key={idx} className={`incident-card ${inc.severity === 'medium' ? 'warning' : ''}`}>
-                  <div className="incident-header">
-                    <div className="incident-title">
-                      <h4>
-                        <AlertTriangle size={16} style={{ color: inc.severity === 'high' ? 'var(--failed)' : 'var(--warning)' }} />
-                        {inc.fault_category} detected on task <code>{inc.task_id}</code>
-                      </h4>
-                      <p>Triggered: {inc.timestamp}</p>
-                    </div>
-                    <span className={`severity-tag ${inc.severity}`}>
-                      {inc.severity} Severity
+              <button className="inspector-close-btn" onClick={() => setActiveNode('')}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="inspector-content">
+              {/* Active Incident Warning box */}
+              {activeIncident ? (
+                <div className={`inspector-incident-card ${activeIncident.severity === 'medium' ? 'warning' : ''}`}>
+                  <div className="incident-badge-row">
+                    <span style={{ fontWeight: 700, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', color: activeIncident.severity === 'high' ? '#ef4444' : '#d97706' }}>
+                      <AlertTriangle size={14} />
+                      Incident {activeIncident.id}
+                    </span>
+                    <span className={`severity-pill ${activeIncident.severity}`}>
+                      {activeIncident.severity}
                     </span>
                   </div>
 
-                  <div className="incident-body">
-                    <p style={{ fontWeight: 500, marginBottom: '6px' }}>Diagnostic Evidence:</p>
-                    <div className="incident-evidence">{inc.evidence}</div>
-                    
-                    <p style={{ margin: '12px 0 6px 0' }}><span style={{ fontWeight: 500 }}>Root Cause Analysis:</span> {inc.root_cause}</p>
-                    <p><span style={{ fontWeight: 500 }}>Proposed Remediation:</span> <code>{inc.proposed_action}</code></p>
+                  <p style={{ margin: '0 0 6px 0', fontSize: '11px', fontWeight: 600 }}>Diagnostic Evidence:</p>
+                  <div className="incident-evidence-box">
+                    {activeIncident.evidence}
                   </div>
 
-                  <div className="incident-actions">
+                  <div style={{ fontSize: '11px', lineHeight: 1.4, color: '#334155' }}>
+                    <p style={{ margin: '4px 0' }}><span style={{ fontWeight: 600 }}>Root Cause:</span> {activeIncident.root_cause}</p>
+                    <p style={{ margin: '4px 0' }}><span style={{ fontWeight: 600 }}>Proposed Fix:</span> {activeIncident.proposed_action}</p>
+                  </div>
+
+                  <div className="action-buttons-group">
                     <button 
-                      className="btn btn-primary"
-                      onClick={() => handleApproveRemediation(inc.id)}
-                      disabled={isProcessing === inc.id}
+                      className="btn btn-action-primary"
+                      onClick={() => handleApproveRemediation(activeIncident.id)}
+                      disabled={isProcessing === activeIncident.id}
                     >
-                      {isProcessing === inc.id ? (
+                      {isProcessing === activeIncident.id ? (
                         <>
-                          <RefreshCw size={14} className="animate-spin" />
-                          Processing Fix...
+                          <RefreshCw size={12} className="animate-spin" />
+                          Executing...
                         </>
                       ) : (
                         <>
-                          <UserCheck size={14} />
-                          Approve & Execute Fix
+                          <UserCheck size={12} />
+                          Approve Fix
                         </>
                       )}
                     </button>
                     <button 
-                      className="btn btn-secondary"
-                      onClick={() => handleDeclineIncident(inc.id)}
-                      disabled={isProcessing === inc.id}
+                      className="btn btn-action-secondary"
+                      onClick={() => handleDeclineIncident(activeIncident.id)}
+                      disabled={isProcessing === activeIncident.id}
                     >
-                      <X size={14} />
-                      Decline & Dismiss
+                      Dismiss
                     </button>
                   </div>
                 </div>
-              ))
+              ) : (
+                getNodeStatus(selectedNodeInfo.id) === 'failed' && (
+                  <div className="inspector-incident-card">
+                    <div style={{ fontSize: '12px', color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
+                      <AlertCircle size={14} />
+                      Execution Halted
+                    </div>
+                    <p style={{ fontSize: '11px', color: '#7f1d1d', margin: '4px 0 0 0' }}>This task failed. Check parent nodes or logs.</p>
+                  </div>
+                )
+              )}
+
+              {/* Node specifications */}
+              <div className="inspector-section">
+                <h3 className="inspector-section-title">Configuration</h3>
+                
+                <div className="property-grid">
+                  {selectedNodeInfo.details.source && (
+                    <div className="property-row">
+                      <span className="property-label">Source System</span>
+                      <span className="property-value">{selectedNodeInfo.details.source}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.path && (
+                    <div className="property-row">
+                      <span className="property-label">File Pattern</span>
+                      <span className="property-value mono">{selectedNodeInfo.details.path}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.primaryKey && (
+                    <div className="property-row">
+                      <span className="property-label">Primary Key</span>
+                      <span className="property-value mono">{selectedNodeInfo.details.primaryKey}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.freshnessSla && (
+                    <div className="property-row">
+                      <span className="property-label">Freshness SLA</span>
+                      <span className="property-value">{selectedNodeInfo.details.freshnessSla}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.targetTable && (
+                    <div className="property-row">
+                      <span className="property-label">Target BQ Table</span>
+                      <span className="property-value mono">{selectedNodeInfo.details.targetTable}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.partitionBy && (
+                    <div className="property-row">
+                      <span className="property-label">Partition Field</span>
+                      <span className="property-value mono">{selectedNodeInfo.details.partitionBy}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.clusterBy && (
+                    <div className="property-row">
+                      <span className="property-label">Cluster Field</span>
+                      <span className="property-value mono">{selectedNodeInfo.details.clusterBy}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.mode && (
+                    <div className="property-row">
+                      <span className="property-label">Write Mode</span>
+                      <span className="property-value">{selectedNodeInfo.details.mode}</span>
+                    </div>
+                  )}
+                  {selectedNodeInfo.details.description && (
+                    <div className="property-row">
+                      <span className="property-label">Goal</span>
+                      <span className="property-value">{selectedNodeInfo.details.description}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Quality rules */}
+              {(selectedNodeInfo.details.rule || selectedNodeInfo.details.nullTolerance || selectedNodeInfo.details.range || selectedNodeInfo.details.query) && (
+                <div className="inspector-section">
+                  <h3 className="inspector-section-title">Validation Rules</h3>
+                  <div className="property-grid">
+                    {selectedNodeInfo.details.rule && (
+                      <div className="property-row">
+                        <span className="property-label">Audit Engine</span>
+                        <span className="property-value">{selectedNodeInfo.details.rule}</span>
+                      </div>
+                    )}
+                    {selectedNodeInfo.details.nullTolerance && (
+                      <div className="property-row">
+                        <span className="property-label">Null Limit</span>
+                        <span className="property-value mono">{selectedNodeInfo.details.nullTolerance}</span>
+                      </div>
+                    )}
+                    {selectedNodeInfo.details.range && (
+                      <div className="property-row">
+                        <span className="property-label">Expected Row Bounds</span>
+                        <span className="property-value">{selectedNodeInfo.details.range}</span>
+                      </div>
+                    )}
+                    {selectedNodeInfo.details.referentialChecks && (
+                      <div className="property-row">
+                        <span className="property-label">Foreign Constraints</span>
+                        <span className="property-value mono">{selectedNodeInfo.details.referentialChecks}</span>
+                      </div>
+                    )}
+                    {selectedNodeInfo.details.query && (
+                      <div className="property-row" style={{ flexDirection: 'column', gap: '6px' }}>
+                        <span className="property-label">Check Operator SQL</span>
+                        <pre style={{ margin: 0, padding: '8px', backgroundColor: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: '4px', fontFamily: 'var(--mono)', fontSize: '10px', overflowX: 'auto', whiteSpace: 'pre-wrap' }}>
+                          {selectedNodeInfo.details.query}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Node Schema Registry list */}
+              {selectedNodeInfo.details.schema && (
+                <div className="inspector-section">
+                  <h3 className="inspector-section-title">Schema Fields</h3>
+                  <div className="schema-list">
+                    {Object.entries(selectedNodeInfo.details.schema).map(([field, type]) => (
+                      <div className="schema-item" key={field}>
+                        <span className="schema-field">{field}</span>
+                        <span className="schema-type">{type}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </aside>
+        )}
+
+        {/* Collapsible Telemetry / Drawer */}
+        <section className={`telemetry-drawer ${telemetryOpen ? 'open' : ''}`}>
+          <div className="telemetry-header">
+            <div className="telemetry-tabs">
+              <button 
+                className={`telemetry-tab-btn ${activeTab === 'logs' ? 'active' : ''}`}
+                onClick={() => setActiveTab('logs')}
+              >
+                Local Logs
+              </button>
+              <button 
+                className={`telemetry-tab-btn ${activeTab === 'remediations' ? 'active' : ''}`}
+                onClick={() => setActiveTab('remediations')}
+              >
+                Remediation Audit
+              </button>
+              <button 
+                className={`telemetry-tab-btn ${activeTab === 'stats' ? 'active' : ''}`}
+                onClick={() => setActiveTab('stats')}
+              >
+                Telemetry Statistics
+              </button>
+            </div>
+            <button className="telemetry-close-btn" onClick={() => setTelemetryOpen(false)}>
+              <X size={14} />
+            </button>
+          </div>
+
+          <div className="telemetry-content">
+            
+            {/* Terminal logs list */}
+            {activeTab === 'logs' && (
+              <div className="terminal-console" id="log-terminal">
+                {consoleLogs.map((log, idx) => (
+                  <div className="terminal-line" key={idx}>
+                    <span className="terminal-time">[{log.time}]</span>
+                    <span className={`terminal-level ${log.level}`}>{log.level.toUpperCase()}</span>
+                    <span>{log.text}</span>
+                  </div>
+                ))}
+              </div>
             )}
 
-            {/* Resolved incidents table */}
-            {incidents.filter(i => i.status === 'remediated').length > 0 && (
-              <div style={{ marginTop: '40px' }}>
-                <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '16px' }}>
-                  Recently Remediated Incidents
-                </h3>
-                <div className="table-wrapper">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>Incident</th>
-                        <th>Failing Task</th>
-                        <th>Resolution Type</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {incidents.filter(i => i.status === 'remediated').map((inc, idx) => (
-                        <tr key={idx}>
-                          <td><code>{inc.id}</code></td>
-                          <td>{inc.fault_category}</td>
-                          <td><code>{inc.task_id}</code></td>
-                          <td>Approved Auto-Fix</td>
-                          <td>
-                            <span style={{ color: 'var(--healthy)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                              <Check size={14} /> Remediated
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            {/* Remediation Loops list */}
+            {activeTab === 'remediations' && (
+              <div className="remediation-history-list">
+                {remediations.map((rem, idx) => (
+                  <div className="rem-history-item" key={idx}>
+                    <div className="rem-history-left">
+                      <span className="rem-history-title">{rem.fault} Auto-Remediation</span>
+                      <span className="rem-history-desc">Target Table: <code>{rem.target}</code> | Method: {rem.method}</span>
+                    </div>
+                    <div className="rem-history-right">
+                      <span className="rem-history-time">{rem.time}</span>
+                      <div>
+                        <span className="rem-history-badge">PASSED ({rem.duration})</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Pipeline telemetry metrics */}
+            {activeTab === 'stats' && (
+              <div className="stats-grid">
+                
+                <div className="stat-item">
+                  <div className="stat-info">
+                    <h4>Success Rate</h4>
+                    <p className="stat-val">98.2%</p>
+                  </div>
+                  <div className="stat-icon"><CheckCircle2 size={16} /></div>
                 </div>
+
+                <div className="stat-item">
+                  <div className="stat-info">
+                    <h4>Quarantines</h4>
+                    <p className="stat-val">{incidents.filter(i => i.status === 'pending_approval').length}</p>
+                  </div>
+                  <div className="stat-icon" style={{ color: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)' }}><ShieldAlert size={16} /></div>
+                </div>
+
+                <div className="stat-item">
+                  <div className="stat-info">
+                    <h4>Analytic Storage</h4>
+                    <p className="stat-val">14.8 MB</p>
+                  </div>
+                  <div className="stat-icon" style={{ color: '#0ea5e9', backgroundColor: 'rgba(14, 165, 233, 0.1)' }}><Database size={16} /></div>
+                </div>
+
+                {/* SVG Mini bar chart */}
+                <div className="stat-item" style={{ padding: '8px 12px' }}>
+                  <div className="stat-info" style={{ marginRight: '12px' }}>
+                    <h4>Row Throughput</h4>
+                    <p className="stat-val" style={{ fontSize: '13px' }}>7-Day History</p>
+                  </div>
+                  <div className="drawer-chart-container">
+                    {volumeData.map((item, idx) => (
+                      <div className="drawer-chart-bar-wrapper" key={idx}>
+                        <div 
+                          className={`drawer-chart-bar ${item.status === 'anomaly' ? 'anomaly' : ''}`}
+                          style={{ height: `${Math.min(90, (item.count / 1500) * 80 + 5)}px` }}
+                        ></div>
+                        <span className="drawer-chart-label">{item.day.split('-')[1]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
               </div>
             )}
 
           </div>
-        )}
-
-        {/* Tab 3: Console Terminal Output Logs */}
-        {activeTab === 'logs' && (
-          <div className="section-card">
-            <div className="section-header">
-              <h2><Terminal size={18} /> Local Execution Console</h2>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Live system log stream</span>
-            </div>
-
-            <div className="console-logs" id="log-terminal">
-              {consoleLogs.map((log, idx) => (
-                <div className="log-line" key={idx}>
-                  <span className="log-time">[{log.time}]</span>
-                  <span className={`log-level ${log.level}`}>{log.level.toUpperCase()}</span>
-                  <span className="log-text">{log.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        </section>
 
       </main>
     </div>
