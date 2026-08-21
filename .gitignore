@@ -47,3 +47,11 @@ out/
 *~
 .DS_Store
 Thumbs.db
+
+# Pipeline Data Imports
+data/*.csv
+data/orders/
+data/events/
+data/raw/
+data/processed/
+
