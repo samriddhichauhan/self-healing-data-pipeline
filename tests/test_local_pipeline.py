@@ -10,20 +10,47 @@ from unittest.mock import MagicMock
 # Mock Airflow imports before importing the DAG module
 # This allows us to unit test the ETL logic without installing Airflow locally.
 # ------------------------------------------------------------------------------
+class MockOperator:
+    def __init__(self, task_id, python_callable=None, dag=None, **kwargs):
+        self.task_id = task_id
+        self.python_callable = python_callable
+        self.upstream_list = []
+        self.downstream_list = []
+    def __rshift__(self, other):
+        if isinstance(other, list):
+            for item in other:
+                self >> item
+        else:
+            if other not in self.downstream_list:
+                self.downstream_list.append(other)
+            if self not in other.upstream_list:
+                other.upstream_list.append(self)
+        return other
+    def __rrshift__(self, other):
+        if isinstance(other, list):
+            for item in other:
+                item >> self
+        return self
+
 class MockDAG:
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self, dag_id="self_healing_pipeline", *args, **kwargs):
+        self.dag_id = dag_id
+        self.tasks = []
     def __enter__(self):
         return self
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
+
+def mock_python_operator(*args, **kwargs):
+    op = MockOperator(*args, **kwargs)
+    return op
 
 mock_airflow = MagicMock()
 mock_airflow.DAG = MockDAG
 
 mock_operators = MagicMock()
 mock_operators.python = MagicMock()
-mock_operators.python.PythonOperator = MagicMock
+mock_operators.python.PythonOperator = mock_python_operator
 
 sys.modules["airflow"] = mock_airflow
 sys.modules["airflow.operators"] = mock_operators
@@ -108,12 +135,14 @@ def test_valid_pipeline_run(setup_test_env):
     context = {"ds": "2026-06-01"}
     
     # Run pipeline tasks
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     etl.validate_schema(**context)
     etl.validate_quality(**context)
     etl.transform_data(**context)
-    etl.verify_final(**context)
+    etl.load_data(**context)
+    etl.agent_monitoring(**context)
     
     # Assert output files exist in processed/
     processed_dir = setup_test_env / "processed"
@@ -121,6 +150,10 @@ def test_valid_pipeline_run(setup_test_env):
     assert os.path.exists(processed_dir / "products.csv")
     assert os.path.exists(processed_dir / "orders" / "orders_2026-06-01.csv")
     assert os.path.exists(processed_dir / "events" / "events_2026-06-01.jsonl")
+    
+    # Verify status report written by agent monitoring
+    status_file = setup_test_env / "incidents" / "status" / "status_2026-06-01.json"
+    assert os.path.exists(status_file)
     
     # Verify outputs are clean and have expected row sizes
     df_o = pd.read_csv(processed_dir / "orders" / "orders_2026-06-01.csv")
@@ -138,6 +171,7 @@ def test_invalid_schema_missing_column(setup_test_env):
     df = df.drop(columns=["email"])
     df.to_csv(raw_customers, index=False)
     
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     
@@ -155,6 +189,7 @@ def test_invalid_schema_type_mismatch(setup_test_env):
     df["price"] = "Ten Dollars"
     df.to_csv(raw_products, index=False)
     
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     
@@ -172,6 +207,7 @@ def test_duplicate_primary_keys(setup_test_env):
     df.iloc[1] = df.iloc[0]  # Copy first order to second row (duplicate primary key)
     df.to_csv(raw_orders, index=False)
     
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     etl.validate_schema(**context)
@@ -189,6 +225,7 @@ def test_abnormal_volume_low_rows(setup_test_env):
     df = pd.read_csv(raw_orders)
     df.head(10).to_csv(raw_orders, index=False)
     
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     etl.validate_schema(**context)
@@ -207,6 +244,7 @@ def test_null_spike_violation(setup_test_env):
     df.loc[0:49, "order_total"] = None
     df.to_csv(raw_orders, index=False)
     
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     etl.validate_schema(**context)
@@ -225,6 +263,7 @@ def test_broken_foreign_key_referential_integrity(setup_test_env):
     df.loc[0, "customer_id"] = "CUST999999"
     df.to_csv(raw_orders, index=False)
     
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     etl.validate_schema(**context)
@@ -234,18 +273,78 @@ def test_broken_foreign_key_referential_integrity(setup_test_env):
 
 
 def test_staleness_sla_violation(setup_test_env):
-    """Tests validation error on staleness SLA violation (all dates fall behind execution date)."""
+    """Tests validation error on orders staleness SLA violation."""
     context = {"ds": "2026-06-01"}
     
-    # Set all timestamps to a stale date (yesterday)
+    # Set all order timestamps to a stale date (yesterday)
     raw_orders = setup_test_env / "raw" / "orders" / "orders_2026-06-01.csv"
     df = pd.read_csv(raw_orders)
     df["order_ts"] = "2026-05-31 23:59:59"
     df.to_csv(raw_orders, index=False)
     
+    etl.ingest_dimensions()
     etl.ingest_orders(**context)
     etl.ingest_events(**context)
     etl.validate_schema(**context)
     
-    with pytest.raises(ValueError, match="Freshness SLA breach"):
+    with pytest.raises(ValueError, match="Orders Freshness SLA breach"):
         etl.validate_quality(**context)
+
+
+def test_events_staleness_sla_violation(setup_test_env):
+    """Tests validation error on events staleness SLA violation."""
+    context = {"ds": "2026-06-01"}
+    
+    # Set all event timestamps to a stale date
+    raw_events = setup_test_env / "raw" / "events" / "events_2026-06-01.jsonl"
+    df = pd.read_json(raw_events, lines=True)
+    df["event_ts"] = "2026-05-31 12:00:00"
+    df.to_json(raw_events, orient="records", lines=True)
+    
+    etl.ingest_dimensions()
+    etl.ingest_orders(**context)
+    etl.ingest_events(**context)
+    etl.validate_schema(**context)
+    
+    with pytest.raises(ValueError, match="Events Freshness SLA breach"):
+        etl.validate_quality(**context)
+
+
+def test_dag_task_structure():
+    """Verifies that the Airflow DAG definition has all required tasks and explicit lineage."""
+    t_ingest_dim = etl.t_ingest_dimensions
+    t_ingest_ord = etl.t_ingest_orders
+    t_ingest_evt = etl.t_ingest_events
+    t_val_sch = etl.t_validate_schema
+    t_val_qual = etl.t_validate_quality
+    t_trans = etl.t_transform_data
+    t_load = etl.t_load_data
+    t_agent = etl.t_agent_monitoring
+
+    tasks = [t_ingest_dim, t_ingest_ord, t_ingest_evt, t_val_sch, t_val_qual, t_trans, t_load, t_agent]
+    task_ids = [t.task_id for t in tasks]
+
+    expected_tasks = [
+        "ingest_dimensions",
+        "ingest_orders",
+        "ingest_events",
+        "validate_schema",
+        "validate_quality",
+        "transform_data",
+        "load_data",
+        "agent_monitoring"
+    ]
+    
+    for expected in expected_tasks:
+        assert expected in task_ids, f"Task {expected} missing from DAG definition"
+        
+    # Verify task lineage dependencies
+    assert t_agent in t_load.downstream_list
+    assert t_load in t_trans.downstream_list
+    assert t_trans in t_val_qual.downstream_list
+    assert t_val_qual in t_val_sch.downstream_list
+    assert t_val_sch in t_ingest_ord.downstream_list
+    assert t_val_sch in t_ingest_dim.downstream_list
+    assert t_val_sch in t_ingest_evt.downstream_list
+
+

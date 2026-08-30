@@ -48,10 +48,15 @@ out/
 .DS_Store
 Thumbs.db
 
-# Pipeline Data Imports
+# Pipeline Data Imports & Staging
 data/*.csv
 data/orders/
 data/events/
 data/raw/
 data/processed/
+data/staging/
+data/incidents/
+incidents/reports/
+incidents/status/
+
 
