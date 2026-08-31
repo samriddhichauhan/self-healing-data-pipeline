@@ -585,14 +585,16 @@ with DAG(
             on_failure_callback=on_task_failure,
         )
 
-    # Parallel ingestion tasks feed into schema validation stage
-    [t_ingest_dimensions, t_ingest_orders, t_ingest_events] \
-        >> t_validate_schema \
-        >> t_validate_quality \
-        >> t_transform_data \
-        >> t_load_data \
-        >> t_agent_monitoring
+    # Explicit Logical Dependencies: Parallel Ingestion -> Schema Validation -> Quality -> Transform -> Load -> Agent Monitoring
+    t_ingest_dimensions >> t_validate_schema
+    t_ingest_orders >> t_validate_schema
+    t_ingest_events >> t_validate_schema
 
-    # TaskGroup stage flow for visual Graph rendering
+    t_validate_schema >> t_validate_quality
+    t_validate_quality >> t_transform_data
+    t_transform_data >> t_load_data
+    t_load_data >> t_agent_monitoring
+
+    # TaskGroup stage flow for visual DAG graph rendering
     tg_ingestion >> tg_validation >> tg_transformation >> tg_load >> tg_monitoring
 
