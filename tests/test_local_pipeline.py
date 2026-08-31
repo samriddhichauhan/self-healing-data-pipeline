@@ -32,6 +32,32 @@ class MockOperator:
                 item >> self
         return self
 
+class MockTaskGroup:
+    def __init__(self, group_id="", tooltip="", prefix_group_id=False, *args, **kwargs):
+        self.group_id = group_id
+        self.tooltip = tooltip
+        self.upstream_list = []
+        self.downstream_list = []
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+    def __rshift__(self, other):
+        if isinstance(other, list):
+            for item in other:
+                self >> item
+        else:
+            if other not in self.downstream_list:
+                self.downstream_list.append(other)
+            if self not in getattr(other, 'upstream_list', []):
+                other.upstream_list.append(self)
+        return other
+    def __rrshift__(self, other):
+        if isinstance(other, list):
+            for item in other:
+                item >> self
+        return self
+
 class MockDAG:
     def __init__(self, dag_id="self_healing_pipeline", *args, **kwargs):
         self.dag_id = dag_id
@@ -51,10 +77,23 @@ mock_airflow.DAG = MockDAG
 mock_operators = MagicMock()
 mock_operators.python = MagicMock()
 mock_operators.python.PythonOperator = mock_python_operator
+mock_operators.standard = MagicMock()
+mock_operators.standard.operators = MagicMock()
+mock_operators.standard.operators.python = MagicMock()
+mock_operators.standard.operators.python.PythonOperator = mock_python_operator
+
+mock_utils_task_group = MagicMock()
+mock_utils_task_group.TaskGroup = MockTaskGroup
 
 sys.modules["airflow"] = mock_airflow
 sys.modules["airflow.operators"] = mock_operators
 sys.modules["airflow.operators.python"] = mock_operators.python
+sys.modules["airflow.providers"] = MagicMock()
+sys.modules["airflow.providers.standard"] = mock_operators.standard
+sys.modules["airflow.providers.standard.operators"] = mock_operators.standard.operators
+sys.modules["airflow.providers.standard.operators.python"] = mock_operators.standard.operators.python
+sys.modules["airflow.utils"] = MagicMock()
+sys.modules["airflow.utils.task_group"] = mock_utils_task_group
 # ------------------------------------------------------------------------------
 
 # Add DAGs folder to python path so we can import the pipeline tasks

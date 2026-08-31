@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 
 from airflow import DAG
+from airflow.utils.task_group import TaskGroup
 try:
     from airflow.providers.standard.operators.python import PythonOperator
 except ImportError:
@@ -482,75 +483,96 @@ with DAG(
     tags=["intern-project", "self-healing-pipeline"],
 ) as dag:
 
-    t_ingest_dimensions = PythonOperator(
-        task_id="ingest_dimensions",
-        python_callable=ingest_dimensions,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+    # 1. INGESTION STAGE
+    with TaskGroup(group_id="ingestion", tooltip="Ingestion Stage: Ingest Dimensions, Orders & Events", prefix_group_id=False) as tg_ingestion:
+        t_ingest_dimensions = PythonOperator(
+            task_id="ingest_dimensions",
+            doc_md="**Ingest Dimensions**: Reads customers.csv and products.csv raw files and stages them locally.",
+            python_callable=ingest_dimensions,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    t_ingest_orders = PythonOperator(
-        task_id="ingest_orders",
-        python_callable=ingest_orders,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+        t_ingest_orders = PythonOperator(
+            task_id="ingest_orders",
+            doc_md="**Ingest Orders**: Verifies daily orders CSV batch and stages it to local staging folder.",
+            python_callable=ingest_orders,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    t_ingest_events = PythonOperator(
-        task_id="ingest_events",
-        python_callable=ingest_events,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+        t_ingest_events = PythonOperator(
+            task_id="ingest_events",
+            doc_md="**Ingest Events**: Verifies daily events JSONL batch and stages it to local staging folder.",
+            python_callable=ingest_events,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    t_validate_schema = PythonOperator(
-        task_id="validate_schema",
-        python_callable=validate_schema,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+    # 2. VALIDATION STAGE
+    with TaskGroup(group_id="validation", tooltip="Validation Stage: Column Schemas & Quality/Freshness Rules", prefix_group_id=False) as tg_validation:
+        t_validate_schema = PythonOperator(
+            task_id="validate_schema",
+            doc_md="**Validate Schema**: Performs strict column presence and data type verification against contract.",
+            python_callable=validate_schema,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    t_validate_quality = PythonOperator(
-        task_id="validate_quality",
-        python_callable=validate_quality,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+        t_validate_quality = PythonOperator(
+            task_id="validate_quality",
+            doc_md="**Validate Data Quality**: Enforces row volume bounds, null rate thresholds, key duplication, foreign key referential integrity, and freshness SLAs.",
+            python_callable=validate_quality,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    t_transform_data = PythonOperator(
-        task_id="transform_data",
-        python_callable=transform_data,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+    # 3. TRANSFORMATION STAGE
+    with TaskGroup(group_id="transformation", tooltip="Transformation Stage: Deduplication & Timestamp Formatting", prefix_group_id=False) as tg_transformation:
+        t_transform_data = PythonOperator(
+            task_id="transform_data",
+            doc_md="**Transform Data**: Deduplicates records by primary key and standardizes date/timestamp formats.",
+            python_callable=transform_data,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    t_load_data = PythonOperator(
-        task_id="load_data",
-        python_callable=load_data,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+    # 4. LOAD STAGE
+    with TaskGroup(group_id="load", tooltip="Load Stage: Load Analytics-Ready Data to BigQuery / Storage", prefix_group_id=False) as tg_load:
+        t_load_data = PythonOperator(
+            task_id="load_data",
+            doc_md="**Load to BigQuery**: Prepares and writes analytics-ready processed datasets to destination storage.",
+            python_callable=load_data,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    t_agent_monitoring = PythonOperator(
-        task_id="agent_monitoring",
-        python_callable=agent_monitoring,
-        retries=2,
-        retry_delay=timedelta(minutes=2),
-        on_failure_callback=on_task_failure,
-    )
+    # 5. MONITORING STAGE
+    with TaskGroup(group_id="monitoring", tooltip="Agent Monitoring Stage: Pipeline Health & Observability", prefix_group_id=False) as tg_monitoring:
+        t_agent_monitoring = PythonOperator(
+            task_id="agent_monitoring",
+            doc_md="**Agent Monitoring**: Logs execution status metrics and records pipeline heartbeat.",
+            python_callable=agent_monitoring,
+            retries=2,
+            retry_delay=timedelta(minutes=2),
+            on_failure_callback=on_task_failure,
+        )
 
-    # Official required lineage graph
+    # Explicit Task Lineage
     [t_ingest_dimensions, t_ingest_orders, t_ingest_events] \
         >> t_validate_schema \
         >> t_validate_quality \
         >> t_transform_data \
         >> t_load_data \
         >> t_agent_monitoring
+
+    # Explicit TaskGroup stage flow for visual DAG graph rendering
+    tg_ingestion >> tg_validation >> tg_transformation >> tg_load >> tg_monitoring
 
