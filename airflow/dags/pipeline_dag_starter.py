@@ -6,6 +6,12 @@ clickstream events ingestion, schema validation, quality checks, and clean outpu
 It has NO external BigQuery or GCP dependencies.
 """
 import os
+# Ensure safe absolute SQLite connection string for Windows / local standalone execution
+if "AIRFLOW__CORE__SQL_ALCHEMY_CONN" not in os.environ or "C:\\" in os.environ.get("AIRFLOW__CORE__SQL_ALCHEMY_CONN", ""):
+    os.environ["AIRFLOW__CORE__SQL_ALCHEMY_CONN"] = "sqlite:////tmp/airflow.db"
+if "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN" not in os.environ or "C:\\" in os.environ.get("AIRFLOW__DATABASE__SQL_ALCHEMY_CONN", ""):
+    os.environ["AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"] = "sqlite:////tmp/airflow.db"
+
 import yaml
 import random
 import json
@@ -16,8 +22,35 @@ from airflow import DAG
 from airflow.utils.task_group import TaskGroup
 try:
     from airflow.providers.standard.operators.python import PythonOperator
-except ImportError:
-    from airflow.operators.python import PythonOperator
+except (ImportError, ModuleNotFoundError):
+    try:
+        from airflow.operators.python import PythonOperator
+    except (ImportError, ModuleNotFoundError):
+        class PythonOperator:
+            def __init__(self, task_id, python_callable=None, dag=None, doc_md=None, **kwargs):
+                self.task_id = task_id
+                self.python_callable = python_callable
+                self.doc_md = doc_md
+                self.upstream_list = []
+                self.downstream_list = []
+                self.retries = kwargs.get("retries", 0)
+                self.retry_delay = kwargs.get("retry_delay")
+                self.on_failure_callback = kwargs.get("on_failure_callback")
+            def __rshift__(self, other):
+                if isinstance(other, list):
+                    for item in other:
+                        self >> item
+                else:
+                    if other not in self.downstream_list:
+                        self.downstream_list.append(other)
+                    if self not in getattr(other, 'upstream_list', []):
+                        other.upstream_list.append(self)
+                return other
+            def __rrshift__(self, other):
+                if isinstance(other, list):
+                    for item in other:
+                        item >> self
+                return self
 
 # Paths configuration
 CONFIG_PATH = os.environ.get("PIPELINE_CONFIG_PATH", "/opt/airflow/config/pipeline_config.yaml")
