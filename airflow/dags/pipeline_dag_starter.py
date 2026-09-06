@@ -657,7 +657,12 @@ with DAG(
     ) as tg_ingestion:
         t_ingest_dimensions = PythonOperator(
             task_id="ingest_dimensions",
-            doc_md="### Ingest Dimensions\nReads customers.csv and products.csv raw files and stages them locally.",
+            doc_md="""### Ingest Dimensions
+**What it does:** Reads raw `customers.csv` and `products.csv` files and copies them into the staging directory (`data/staging/`).
+**What it validates/processes:** Verifies file existence, read accessibility, and baseline schema presence for static reference datasets.
+**What happens if it fails:** Triggers the `on_task_failure` hook, logs an ingestion alert, and invokes the AI Diagnostic Engine to investigate missing or corrupt dimension assets.
+**What happens next:** Passes control downstream to `validate_schema` in the VALIDATION stage.
+""",
             python_callable=ingest_dimensions,
             retries=2,
             retry_delay=timedelta(minutes=2),
@@ -666,7 +671,12 @@ with DAG(
 
         t_ingest_orders = PythonOperator(
             task_id="ingest_orders",
-            doc_md="### Ingest Orders\nVerifies daily orders CSV batch and stages it to local staging folder.",
+            doc_md="""### Ingest Orders
+**What it does:** Ingests daily transactional orders CSV file (`orders_{ds}.csv`) into staging.
+**What it validates/processes:** Ensures daily batch arrival, verifies header integrity, and stages raw orders.
+**What happens if it fails:** Triggers failure callback, raises an incident for volume or missing file anomalies, and invokes the diagnostic agent.
+**What happens next:** Passes staged orders to `validate_schema` in the VALIDATION stage.
+""",
             python_callable=ingest_orders,
             retries=2,
             retry_delay=timedelta(minutes=2),
@@ -675,7 +685,12 @@ with DAG(
 
         t_ingest_events = PythonOperator(
             task_id="ingest_events",
-            doc_md="### Ingest Events\nVerifies daily events JSONL batch and stages it to local staging folder.",
+            doc_md="""### Ingest Events
+**What it does:** Ingests clickstream event JSONL streams (`events_{ds}.jsonl`) for the execution date.
+**What it validates/processes:** Reads event payloads, parses JSON syntax, and writes to staging.
+**What happens if it fails:** Logs streaming file failure, notifies the incident management system, and triggers diagnostic diagnosis.
+**What happens next:** Feeds staged events to `validate_schema` in the VALIDATION stage.
+""",
             python_callable=ingest_events,
             retries=2,
             retry_delay=timedelta(minutes=2),
@@ -690,7 +705,12 @@ with DAG(
     ) as tg_validation:
         t_validate_schema = PythonOperator(
             task_id="validate_schema",
-            doc_md="### Validate Schema\nPerforms strict column presence and data type verification against contract.",
+            doc_md="""### Validate Schema
+**What it does:** Enforces strict column schema contracts and data types across staged datasets.
+**What it validates/processes:** Compares current schema columns and types against `pipeline_config.yaml`. Detects extra, missing, or renamed columns (schema drift).
+**What happens if it fails:** Halts execution, records `SCHEMA_DRIFT` failure category, creates incident report, and invokes AI Agent for automated contract patch or escalation.
+**What happens next:** Upon success, proceeds to `validate_quality` for deep data assertions.
+""",
             python_callable=validate_schema,
             retries=2,
             retry_delay=timedelta(minutes=2),
@@ -699,7 +719,17 @@ with DAG(
 
         t_validate_quality = PythonOperator(
             task_id="validate_quality",
-            doc_md="### Validate Data Quality\nEnforces row volume bounds, null rate thresholds, key duplication, foreign key referential integrity, and freshness SLAs.",
+            doc_md="""### Validate Data Quality
+**What it does:** Runs comprehensive data quality assertions on staged orders and events.
+**What it validates/processes:**
+- **Volume Anomalies:** Row count must fall within expected bounds (e.g. 240-360 orders/day).
+- **Null Rates:** `order_total` null rate must be <= 2%, `customer_id` must be 0% null.
+- **Key Uniqueness:** Zero duplicate primary keys (`order_id`, `event_id`).
+- **Referential Integrity:** `customer_id` and `product_id` must exist in dimension tables.
+- **Freshness SLA:** Timestamps must be within SLA threshold (max age 26h).
+**What happens if it fails:** Raises exception tagged with failure type (`VOLUME_ANOMALY`, `NULL_SPIKE`, `DUPLICATE_INGESTION`, `REFERENTIAL_BREAK`, `STALENESS`), triggers `on_task_failure` callback, generates incident report, and launches AI Self-Healing remediation.
+**What happens next:** Passes validated clean data to `transform_data` in the TRANSFORMATION stage.
+""",
             python_callable=validate_quality,
             retries=2,
             retry_delay=timedelta(minutes=2),
@@ -714,7 +744,12 @@ with DAG(
     ) as tg_transformation:
         t_transform_data = PythonOperator(
             task_id="transform_data",
-            doc_md="### Transform Data\nDeduplicates records by primary key and standardizes date/timestamp formats.",
+            doc_md="""### Transform Data
+**What it does:** Performs business transformations, timestamp conversions, deduplication, and feature derivation.
+**What it validates/processes:** Builds analytical tables (`fct_orders`, `fct_events`, `dim_customers`, `dim_products`) from staged datasets.
+**What happens if it fails:** Triggers failure callback, logs transformation error details, and halts loading.
+**What happens next:** Sends transformed clean datasets to `load_data` in the LOAD stage.
+""",
             python_callable=transform_data,
             retries=2,
             retry_delay=timedelta(minutes=2),
@@ -729,7 +764,12 @@ with DAG(
     ) as tg_load:
         t_load_data = PythonOperator(
             task_id="load_data",
-            doc_md="### Load to BigQuery\nPrepares and writes analytics-ready processed datasets to destination storage.",
+            doc_md="""### Load to BigQuery / Storage
+**What it does:** Commits analytics-ready processed datasets to target destination storage / BigQuery analytics data warehouse.
+**What it validates/processes:** Verifies target partition alignment and table commit success.
+**What happens if it fails:** Triggers failure callback and raises target storage alert.
+**What happens next:** Passes control to `agent_monitoring` in the MONITORING stage.
+""",
             python_callable=load_data,
             retries=2,
             retry_delay=timedelta(minutes=2),
@@ -744,7 +784,12 @@ with DAG(
     ) as tg_monitoring:
         t_agent_monitoring = PythonOperator(
             task_id="agent_monitoring",
-            doc_md="### Agent Monitoring\nLogs execution status metrics and records pipeline heartbeat.",
+            doc_md="""### Agent Monitoring
+**What it does:** Records pipeline completion metrics, logs row counts across all target tables, and updates status heartbeat JSON.
+**What it validates/processes:** Logs dataset record counts (`customers`, `products`, `orders`, `events`) and outputs execution status report.
+**What happens if it fails:** Alerts on monitoring report serialization issues.
+**What happens next:** Concludes DAG execution with status `SUCCESS`.
+""",
             python_callable=agent_monitoring,
             retries=2,
             retry_delay=timedelta(minutes=2),

@@ -5,7 +5,6 @@ import {
   CheckCircle2, 
   Database, 
   FileCode2, 
-  Terminal, 
   ShieldAlert, 
   Play, 
   X, 
@@ -14,19 +13,34 @@ import {
   Server, 
   AlertCircle,
   Sun,
-  Moon
+  Moon,
+  ArrowRight,
+  GitBranch,
+  Layers,
+  ShieldCheck,
+  Cpu,
+  Clock,
+  Check,
+  Eye
 } from 'lucide-react';
 
 interface Incident {
   id: string;
   timestamp: string;
   task_id: string;
+  dataset: string;
   fault_category: string;
   severity: 'high' | 'medium';
   status: 'pending_approval' | 'remediated' | 'escalated';
+  observed: string;
+  expected: string;
   evidence: string;
-  root_cause: string;
-  proposed_action: string;
+  hypothesis: string;
+  confidence: string;
+  blast_radius: string;
+  action: 'AUTO_FIX' | 'ESCALATE';
+  remediation: string;
+  verification: string;
 }
 
 interface LogLine {
@@ -58,7 +72,8 @@ interface PipelineNode {
   id: string;
   title: string;
   subtitle: string;
-  type: 'input' | 'ingest' | 'validate' | 'load' | 'check' | 'monitor';
+  stage: 'data_sources' | 'ingestion' | 'validation' | 'transformation' | 'load' | 'monitoring';
+  type: 'input' | 'ingest' | 'validate' | 'transform' | 'load' | 'check' | 'monitor';
   details: NodeDetails;
 }
 
@@ -70,64 +85,142 @@ function App() {
   const [activeFault, setActiveFault] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState<string | null>(null);
   const [activeNode, setActiveNode] = useState<string>('ingest_orders');
-  
-  // Pipeline node running states
+  const [viewMode, setViewMode] = useState<'overview' | 'canvas'>('overview');
+
+  // Node running and duration states
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, 'healthy' | 'warning' | 'failed' | 'idle' | 'running'>>({});
+  const [nodeDurations] = useState<Record<string, string>>({
+    source_customers: 'static',
+    source_products: 'static',
+    ingest_dimensions: '0.8s',
+    ingest_orders: '1.2s',
+    ingest_events: '1.5s',
+    validate_schema: '0.6s',
+    validate_quality: '1.1s',
+    transform_data: '1.4s',
+    load_data: '2.1s',
+    agent_monitoring: '0.5s'
+  });
   const [isSimulationActive, setIsSimulationActive] = useState(false);
   const [connections, setConnections] = useState<Array<{ from: string, to: string, path: string, status: string }>>([]);
+
+  // Metrics overview
+  const [metrics, setMetrics] = useState({
+    lastRun: '2026-06-01 02:00 UTC',
+    status: 'SUCCESS',
+    activeIncidents: 1,
+    successfulRuns: 18,
+    failedRuns: 2,
+    remediatedIncidents: 2
+  });
 
   // Incidents state
   const [incidents, setIncidents] = useState<Incident[]>([
     {
-      id: "inc-1092",
-      timestamp: "2026-08-20 12:44:12",
+      id: "INC-20260601-1092",
+      timestamp: "2026-06-01 02:05:12",
       task_id: "validate_quality",
-      fault_category: "Volume Anomaly Spike",
+      dataset: "orders",
+      fault_category: "DUPLICATE_INGESTION",
       severity: "medium",
       status: "pending_approval",
-      evidence: "Staged orders: 1,450 rows | Expected range: 240-360 rows | Status: Spike anomaly detected (+302% over baseline)",
-      root_cause: "Duplicate file transfer from upstream scheduler retry.",
-      proposed_action: "Execute idempotent DELETE on staged duplicates followed by target table rebuild."
+      observed: "Staged orders: 1,450 rows | Expected range: 240-360 rows (+302% duplicate spike)",
+      expected: "Unique primary keys (order_id) with row count within 240-360 baseline",
+      evidence: "1,150 duplicate records identified by order_id grouping in staged daily batch",
+      hypothesis: "Upstream scheduler retry triggered duplicate file transfer into staging folder",
+      confidence: "98.5%",
+      blast_radius: "Medium (affects downstream fct_orders metrics and daily aggregate totals)",
+      action: "AUTO_FIX",
+      remediation: "Execute idempotent DELETE on staged duplicates by primary key order_id",
+      verification: "Assert unique order_id count matches baseline (300 rows)",
     }
   ]);
 
   // Past Remediations
   const [remediations, setRemediations] = useState([
-    { id: "rem-091", time: "2026-08-20 10:15:00", fault: "Duplicate Ingestion", target: "fct_orders", method: "Idempotent MERGE", duration: "4.2s", status: "success" },
-    { id: "rem-085", time: "2026-08-19 14:02:18", fault: "Staleness Warning", target: "fct_events", method: "Sensor Recrawl", duration: "8.5s", status: "success" }
+    { id: "rem-091", time: "2026-06-01 02:06:00", fault: "Duplicate Ingestion", target: "orders", method: "Idempotent Deduplication", duration: "3.8s", status: "success" },
+    { id: "rem-085", time: "2026-05-31 02:05:18", fault: "Staleness Warning", target: "events", method: "Sensor Recrawl", duration: "8.5s", status: "success" }
   ]);
 
   // Console Logs
   const [consoleLogs, setConsoleLogs] = useState<LogLine[]>([
-    { time: "17:56:01", level: "info", text: "Airflow LocalExecutor initialized successfully." },
-    { time: "17:56:03", level: "success", text: "Connected to local metadata database (Postgres 15)." },
-    { time: "17:56:05", level: "info", text: "DAG 'self_healing_pipeline' scheduled for daily runs (02:00 UTC)." },
-    { time: "17:56:10", level: "info", text: "Ingestion agent listening for task callbacks..." }
+    { time: "02:00:01", level: "info", text: "Airflow LocalExecutor initialized for DAG self_healing_pipeline." },
+    { time: "02:00:03", level: "success", text: "Connected to SQLite/PostgreSQL metadata database." },
+    { time: "02:00:05", level: "info", text: "DAG 'self_healing_pipeline' scheduled run started for ds=2026-06-01." },
+    { time: "02:00:10", level: "info", text: "Ingestion stage started: dimensions, orders, events in parallel." }
   ]);
 
-  // Volume chart data (daily records loaded)
-  const volumeData = [
-    { day: "08-14", count: 310, status: "healthy" },
-    { day: "08-15", count: 295, status: "healthy" },
-    { day: "08-16", count: 320, status: "healthy" },
-    { day: "08-17", count: 285, status: "healthy" },
-    { day: "08-18", count: 300, status: "healthy" },
-    { day: "08-19", count: 305, status: "healthy" },
-    { day: "08-20", count: 1450, status: "anomaly" } 
+  // 6 Supported Fault Scenarios
+  const faultScenarios = [
+    {
+      id: 'schema_drift',
+      name: 'Schema Drift',
+      desc: 'Extra string column in products CSV',
+      risk: 'high',
+      task: 'validate_schema',
+      dataset: 'products',
+      action: 'ESCALATE' as const
+    },
+    {
+      id: 'volume_drop',
+      name: 'Volume Drop',
+      desc: 'Low row count (12 rows vs 240-360 expected)',
+      risk: 'high',
+      task: 'validate_quality',
+      dataset: 'orders',
+      action: 'ESCALATE' as const
+    },
+    {
+      id: 'null_spike',
+      name: 'Null Spike',
+      desc: '14.5% null order_total values (>2% limit)',
+      risk: 'high',
+      task: 'validate_quality',
+      dataset: 'orders',
+      action: 'ESCALATE' as const
+    },
+    {
+      id: 'duplicate_ingestion',
+      name: 'Duplicate Ingest',
+      desc: '1,450 rows staged with repeated order_ids',
+      risk: 'medium',
+      task: 'validate_quality',
+      dataset: 'orders',
+      action: 'AUTO_FIX' as const
+    },
+    {
+      id: 'referential_break',
+      name: 'Referential Break',
+      desc: 'Missing customer_id reference C-9988 in dim',
+      risk: 'high',
+      task: 'validate_quality',
+      dataset: 'orders',
+      action: 'ESCALATE' as const
+    },
+    {
+      id: 'staleness',
+      name: 'Staleness SLA',
+      desc: 'Batch timestamp exceeds 26h SLA threshold',
+      risk: 'medium',
+      task: 'validate_quality',
+      dataset: 'events',
+      action: 'AUTO_FIX' as const
+    }
   ];
 
-  // Pipeline stages definitions
+  // Pipeline nodes definitions matching Airflow TaskGroups & Tasks
   const pipelineNodes: PipelineNode[] = [
     {
       id: "source_customers",
       title: "customers.csv",
       subtitle: "Dimension Raw Source",
+      stage: "data_sources",
       type: "input",
       details: {
-        source: "CSV Upload",
+        source: "Local Storage",
         path: "data/customers.csv",
         primaryKey: "customer_id",
-        freshnessSla: "None (Static Load)",
+        freshnessSla: "Static Dimension",
         schema: {
           customer_id: "string",
           name: "string",
@@ -141,12 +234,13 @@ function App() {
       id: "source_products",
       title: "products.csv",
       subtitle: "Dimension Raw Source",
+      stage: "data_sources",
       type: "input",
       details: {
-        source: "CSV Upload",
+        source: "Local Storage",
         path: "data/products.csv",
         primaryKey: "product_id",
-        freshnessSla: "None (Static Load)",
+        freshnessSla: "Static Dimension",
         schema: {
           product_id: "string",
           name: "string",
@@ -156,13 +250,27 @@ function App() {
       }
     },
     {
+      id: "ingest_dimensions",
+      title: "Ingest Dimensions",
+      subtitle: "Task: python_callable",
+      stage: "ingestion",
+      type: "ingest",
+      details: {
+        description: "Ingests raw customers.csv and products.csv files into local staging directory.",
+        path: "data/staging/stg_customers.csv",
+        primaryKey: "customer_id",
+        freshnessSla: "Static Dimension Load"
+      }
+    },
+    {
       id: "ingest_orders",
       title: "Ingest Orders",
       subtitle: "Task: python_callable",
+      stage: "ingestion",
       type: "ingest",
       details: {
-        description: "Ingests the daily orders batch file from the source storage directory.",
-        path: "data/orders/orders_{date}.csv",
+        description: "Ingests the daily orders batch file for execution date into staging.",
+        path: "data/orders/orders_{ds}.csv",
         primaryKey: "order_id",
         freshnessSla: "Max 26 Hours"
       }
@@ -171,10 +279,11 @@ function App() {
       id: "ingest_events",
       title: "Ingest Events",
       subtitle: "Task: python_callable",
+      stage: "ingestion",
       type: "ingest",
       details: {
-        description: "Pulls clickstream events logs via mock api stream and stores them locally.",
-        path: "data/events/events_{date}.jsonl",
+        description: "Pulls clickstream event JSONL stream logs and stages them locally.",
+        path: "data/events/events_{ds}.jsonl",
         primaryKey: "event_id",
         freshnessSla: "Max 6 Hours"
       }
@@ -183,10 +292,11 @@ function App() {
       id: "validate_schema",
       title: "Validate Schema",
       subtitle: "Task: python_callable",
+      stage: "validation",
       type: "validate",
       details: {
-        description: "Compares current staged orders and events schemas against configuration.",
-        rule: "Strict type mapping schema audits. Raises error on drift.",
+        description: "Compares current staged table schemas against pipeline_config.yaml contract definitions.",
+        rule: "Strict column presence, names, and data types check. Raises SCHEMA_DRIFT error.",
         activeRules: "customers schema, products schema, orders schema, events schema"
       }
     },
@@ -194,43 +304,48 @@ function App() {
       id: "validate_quality",
       title: "Validate Quality",
       subtitle: "Task: python_callable",
+      stage: "validation",
       type: "validate",
       details: {
-        description: "Validates null rules, row range thresholds, and referential constraints.",
-        nullTolerance: "order_total: 2.0%, customer_id: 0.0%",
+        description: "Enforces row volume bounds, null rate thresholds, key duplication, and referential integrity.",
+        nullTolerance: "order_total: <= 2.0%, customer_id: 0.0%",
         range: "orders: 240 - 360 rows/day | events: 900 - 1500 rows/day",
         referentialChecks: "orders.customer_id -> customers.customer_id, events.customer_id -> customers.customer_id"
       }
     },
     {
-      id: "load_orders_bq",
-      title: "Load Orders BQ",
-      subtitle: "Task: BigQueryInsertJob",
+      id: "transform_data",
+      title: "Transform Data",
+      subtitle: "Task: python_callable",
+      stage: "transformation",
+      type: "transform",
+      details: {
+        description: "Deduplicates records by primary key and standardizes date/timestamp formats into analytical models.",
+        targetTable: "fct_orders, fct_events, dim_customers, dim_products",
+        mode: "Clean transform & format"
+      }
+    },
+    {
+      id: "load_data",
+      title: "Load to Storage / BQ",
+      subtitle: "Task: python_callable",
+      stage: "load",
       type: "load",
       details: {
-        targetTable: "fct_orders",
+        targetTable: "fct_orders, fct_events",
         partitionBy: "order_ts (DAY)",
         clusterBy: "customer_id",
         mode: "WRITE_TRUNCATE (idempotency safety check)"
       }
     },
     {
-      id: "bq_row_count_check",
-      title: "BQ Row Count Check",
-      subtitle: "Task: BigQueryCheck",
-      type: "check",
-      details: {
-        description: "Runs assertion query directly in BigQuery to verify daily row range constraints.",
-        query: "SELECT COUNT(*) BETWEEN 240 AND 360 FROM `fct_orders` WHERE DATE(order_ts) = '{{ ds }}'"
-      }
-    },
-    {
-      id: "agent_monitor",
-      title: "Agent Monitor",
+      id: "agent_monitoring",
+      title: "Agent Monitoring",
       subtitle: "Task: python_callable",
+      stage: "monitoring",
       type: "monitor",
       details: {
-        description: "Validates post-load properties and resolves active pipeline incidents.",
+        description: "Logs pipeline execution metrics, calculates row counts, records status heartbeat.",
         activeRules: "remediation_policy: duplicate_ingestion=auto_fix, volume_anomaly_spike=auto_fix"
       }
     }
@@ -242,7 +357,7 @@ function App() {
 
     const getNodeStatus = (nodeId: string): 'healthy' | 'warning' | 'failed' | 'idle' | 'running' => {
       if (pipelineStatus === 'healthy') {
-        if (nodeId === 'validate_quality' && incidents.some(i => i.status === 'pending_approval' && i.fault_category.includes("Volume"))) {
+        if (nodeId === 'validate_quality' && incidents.some(i => i.status === 'pending_approval' && i.action === 'AUTO_FIX')) {
           return 'warning';
         }
         return 'healthy';
@@ -250,14 +365,14 @@ function App() {
 
       if (activeFault === 'schema_drift') {
         if (nodeId === 'validate_schema') return 'failed';
-        const downstream = ['validate_quality', 'load_orders_bq', 'bq_row_count_check', 'agent_monitor'];
+        const downstream = ['validate_quality', 'transform_data', 'load_data', 'agent_monitoring'];
         if (downstream.includes(nodeId)) return 'idle';
         return 'healthy';
       }
 
-      if (activeFault === 'null_spike' || activeFault === 'ref_break') {
+      if (activeFault && activeFault !== 'schema_drift') {
         if (nodeId === 'validate_quality') return 'failed';
-        const downstream = ['load_orders_bq', 'bq_row_count_check', 'agent_monitor'];
+        const downstream = ['transform_data', 'load_data', 'agent_monitoring'];
         if (downstream.includes(nodeId)) return 'idle';
         return 'healthy';
       }
@@ -272,18 +387,19 @@ function App() {
     const initial: Record<string, 'healthy' | 'warning' | 'failed' | 'idle' | 'running'> = {
       source_customers: 'healthy',
       source_products: 'healthy',
+      ingest_dimensions: getNodeStatus('ingest_dimensions'),
       ingest_orders: getNodeStatus('ingest_orders'),
       ingest_events: getNodeStatus('ingest_events'),
       validate_schema: getNodeStatus('validate_schema'),
       validate_quality: getNodeStatus('validate_quality'),
-      load_orders_bq: getNodeStatus('load_orders_bq'),
-      bq_row_count_check: getNodeStatus('bq_row_count_check'),
-      agent_monitor: getNodeStatus('agent_monitor'),
+      transform_data: getNodeStatus('transform_data'),
+      load_data: getNodeStatus('load_data'),
+      agent_monitoring: getNodeStatus('agent_monitoring'),
     };
     setNodeStatuses(initial);
   }, [activeFault, pipelineStatus, incidents, isSimulationActive]);
 
-  // Recalculate dynamic ports connections coordinates
+  // Recalculate dynamic ports connections coordinates in canvas view
   const updateConnections = () => {
     const flowElement = document.querySelector('.pipeline-flow');
     if (!flowElement) return;
@@ -291,14 +407,15 @@ function App() {
     
     const newConnections: Array<{ from: string, to: string, path: string, status: string }> = [];
     const linkPairs = [
-      { from: 'source_customers', to: 'ingest_orders' },
-      { from: 'source_products', to: 'ingest_orders' },
+      { from: 'source_customers', to: 'ingest_dimensions' },
+      { from: 'source_products', to: 'ingest_dimensions' },
+      { from: 'ingest_dimensions', to: 'validate_schema' },
       { from: 'ingest_orders', to: 'validate_schema' },
       { from: 'ingest_events', to: 'validate_schema' },
       { from: 'validate_schema', to: 'validate_quality' },
-      { from: 'validate_quality', to: 'load_orders_bq' },
-      { from: 'load_orders_bq', to: 'bq_row_count_check' },
-      { from: 'bq_row_count_check', to: 'agent_monitor' }
+      { from: 'validate_quality', to: 'transform_data' },
+      { from: 'transform_data', to: 'load_data' },
+      { from: 'load_data', to: 'agent_monitoring' }
     ];
     
     linkPairs.forEach(({ from, to }) => {
@@ -335,7 +452,6 @@ function App() {
     setConnections(newConnections);
   };
 
-  // Re-run connection path checks on UI shift triggers
   useEffect(() => {
     const timer = setTimeout(() => {
       updateConnections();
@@ -346,9 +462,8 @@ function App() {
       clearTimeout(timer);
       window.removeEventListener('resize', updateConnections);
     };
-  }, [activeNode, pipelineStatus, activeFault, nodeStatuses, telemetryOpen, theme]);
+  }, [activeNode, pipelineStatus, activeFault, nodeStatuses, telemetryOpen, theme, viewMode]);
 
-  // Push new log entry
   const addLog = (level: LogLine['level'], text: string) => {
     const time = new Date().toTimeString().split(' ')[0];
     setConsoleLogs(prev => [...prev, { time, level, text }]);
@@ -360,54 +475,60 @@ function App() {
     setIsSimulationActive(true);
     setPipelineStatus('healthy'); 
     
-    // Clear and reset values
     const resetStates: Record<string, 'healthy' | 'warning' | 'failed' | 'idle' | 'running'> = {
       source_customers: 'healthy',
       source_products: 'healthy',
+      ingest_dimensions: 'idle',
       ingest_orders: 'idle',
       ingest_events: 'idle',
       validate_schema: 'idle',
       validate_quality: 'idle',
-      load_orders_bq: 'idle',
-      bq_row_count_check: 'idle',
-      agent_monitor: 'idle'
+      transform_data: 'idle',
+      load_data: 'idle',
+      agent_monitoring: 'idle'
     };
     setNodeStatuses(resetStates);
     setConsoleLogs([]);
     
-    addLog("info", "Starting E2E self-healing data pipeline run...");
-    addLog("info", "Initializing execution environment & credentials check...");
+    addLog("info", "Starting E2E self-healing data pipeline run for ds=2026-06-01...");
+    addLog("info", "Executing Stage 1: INGESTION (parallel batch processing)...");
     
-    // Step 1: Ingest
     setTimeout(() => {
-      setNodeStatuses(prev => ({ ...prev, ingest_orders: 'running', ingest_events: 'running' }));
-      addLog("info", "Executing task: ingest_orders (loading CSV orders stream)...");
-      addLog("info", "Executing task: ingest_events (fetching clickstream mock JSONL)...");
+      setNodeStatuses(prev => ({ ...prev, ingest_dimensions: 'running', ingest_orders: 'running', ingest_events: 'running' }));
+      addLog("info", "Task: ingest_dimensions -> Ingesting customers.csv & products.csv...");
+      addLog("info", "Task: ingest_orders -> Staging orders_2026-06-01.csv...");
+      addLog("info", "Task: ingest_events -> Parsing events_2026-06-01.jsonl stream...");
       
       setTimeout(() => {
-        setNodeStatuses(prev => ({ ...prev, ingest_orders: 'healthy', ingest_events: 'healthy', validate_schema: 'running' }));
-        addLog("success", "Ingest Orders: successfully loaded 300 order rows.");
-        addLog("success", "Ingest Events: successfully ingested 1,200 events stream.");
-        addLog("info", "Executing task: validate_schema (strict layout check)...");
+        setNodeStatuses(prev => ({ ...prev, ingest_dimensions: 'healthy', ingest_orders: 'healthy', ingest_events: 'healthy', validate_schema: 'running' }));
+        addLog("success", "INGESTION complete: 500 customers, 60 products, 300 orders, 1,200 events staged.");
+        addLog("info", "Executing Stage 2: VALIDATION (validate_schema)...");
         
         setTimeout(() => {
           if (activeFault === 'schema_drift') {
             setNodeStatuses(prev => ({ ...prev, validate_schema: 'failed' }));
             setPipelineStatus('failed');
             addLog("error", "Task validate_schema failed! Schema drift detected in products.csv.");
-            addLog("warn", "Field 'price' expected type FLOAT, got STRING (e.g. '$14.99').");
-            addLog("info", "Triggering AI Diagnostics Agent callback...");
+            addLog("warn", "Field 'price' expected FLOAT, got STRING (e.g. '$14.99').");
+            addLog("info", "Invoking AI Diagnostic Engine hook...");
             
             const newInc: Incident = {
-              id: `inc-${Math.floor(1000 + Math.random() * 9000)}`,
+              id: `INC-20260601-${Math.floor(1000 + Math.random() * 9000)}`,
               timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
               task_id: "validate_schema",
-              fault_category: "Schema Drift",
+              dataset: "products",
+              fault_category: "SCHEMA_DRIFT",
               severity: "high",
               status: "pending_approval",
-              evidence: "Field 'price' expected FLOAT, got STRING (e.g. '$14.99') | Total drifted rows: 100% of batch",
-              root_cause: "Upstream API modification without notification (price field formatting).",
-              proposed_action: "Quarantine batch, create schema evolution log, and escalate alert."
+              observed: "Field 'price' in products.csv failed type check. Expected FLOAT, found STRING.",
+              expected: "Schema contract: price FLOAT, product_id STRING, category STRING",
+              evidence: "Unparsed string values '$14.99' in column 4 across 100% of rows",
+              hypothesis: "Upstream product catalog system export updated price formatting to include currency symbol",
+              confidence: "99.1%",
+              blast_radius: "High (prevents numeric aggregations and price calculations in downstream tables)",
+              action: "ESCALATE",
+              remediation: "Escalate to Data Engineering team for schema contract update or source API patch",
+              verification: "Manual verification after source column format correction",
             };
             setIncidents(prev => [newInc, ...prev.filter(i => i.task_id !== 'validate_schema')]);
             setActiveNode("validate_schema");
@@ -416,27 +537,34 @@ function App() {
           }
           
           setNodeStatuses(prev => ({ ...prev, validate_schema: 'healthy', validate_quality: 'running' }));
-          addLog("success", "Schema validation PASSED. All columns match definitions.");
-          addLog("info", "Executing task: validate_quality (value constraints check)...");
+          addLog("success", "Schema validation PASSED. All column structures match contract.");
+          addLog("info", "Executing Stage 2 (cont): VALIDATION (validate_quality assertions)...");
           
           setTimeout(() => {
             if (activeFault === 'null_spike') {
               setNodeStatuses(prev => ({ ...prev, validate_quality: 'failed' }));
               setPipelineStatus('failed');
-              addLog("error", "Task validate_quality failed! Null spike detected in customer_id.");
-              addLog("warn", "Field 'customer_id' contains 14.5% null values (threshold: 0.0%).");
-              addLog("info", "Triggering AI Diagnostics Agent callback...");
+              addLog("error", "Task validate_quality failed! Null spike detected in order_total.");
+              addLog("warn", "Field 'order_total' contains 14.5% null values (threshold <= 2.0%).");
+              addLog("info", "Invoking AI Diagnostic Engine hook...");
               
               const newInc: Incident = {
-                id: `inc-${Math.floor(1000 + Math.random() * 9000)}`,
+                id: `INC-20260601-${Math.floor(1000 + Math.random() * 9000)}`,
                 timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
                 task_id: "validate_quality",
-                fault_category: "Null Spike",
+                dataset: "orders",
+                fault_category: "NULL_SPIKE",
                 severity: "high",
                 status: "pending_approval",
-                evidence: "Field 'customer_id' contains 14.5% NULL values | Threshold SLA: 0.0%",
-                root_cause: "Database extraction failure on client export.",
-                proposed_action: "Halt transaction pipeline, quarantine table, and raise ticket."
+                observed: "Order total null rate reached 14.5% (threshold limit: 2.0%)",
+                expected: "order_total null rate <= 2.0% across all daily staged records",
+                evidence: "44 null order_total values out of 300 staged orders",
+                hypothesis: "Database extraction query omitted default fallback for pending payments",
+                confidence: "95.4%",
+                blast_radius: "High (affects revenue analytics and daily order volume reports)",
+                action: "ESCALATE",
+                remediation: "Halt transaction pipeline, quarantine null rows, escalate to finance engineering",
+                verification: "Re-run validate_quality after null imputation or source fix",
               };
               setIncidents(prev => [newInc, ...prev.filter(i => i.task_id !== 'validate_quality')]);
               setActiveNode("validate_quality");
@@ -444,139 +572,73 @@ function App() {
               return;
             }
             
-            if (activeFault === 'ref_break') {
-              setNodeStatuses(prev => ({ ...prev, validate_quality: 'failed' }));
-              setPipelineStatus('failed');
-              addLog("error", "Task validate_quality failed! Referential key constraint violation.");
-              addLog("warn", "Staged orders reference customer_id 'C-9988' which is missing in dim_customers.");
-              addLog("info", "Triggering AI Diagnostics Agent callback...");
-              
-              const newInc: Incident = {
-                id: `inc-${Math.floor(1000 + Math.random() * 9000)}`,
-                timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-                task_id: "validate_quality",
-                fault_category: "Referential Breakage",
-                severity: "high",
-                status: "pending_approval",
-                evidence: "Staged orders reference customer_id 'C-9988' which does not exist in dim_customers.",
-                root_cause: "Stale dimensions sync in upstream source.",
-                proposed_action: "Quarantine missing reference records, generate surrogate logs, and load clean rows."
-              };
-              setIncidents(prev => [newInc, ...prev.filter(i => i.task_id !== 'validate_quality')]);
-              setActiveNode("validate_quality");
-              setIsSimulationActive(false);
-              return;
-            }
-            
-            setNodeStatuses(prev => ({ ...prev, validate_quality: 'healthy', load_orders_bq: 'running' }));
-            addLog("success", "Data quality checks PASSED. Row bounds and foreign keys verified.");
-            addLog("info", "Executing task: load_orders_to_bq (loading structured data to BQ)...");
+            setNodeStatuses(prev => ({ ...prev, validate_quality: 'healthy', transform_data: 'running' }));
+            addLog("success", "Data quality assertions PASSED: Row bounds, null rates, and referential keys valid.");
+            addLog("info", "Executing Stage 3: TRANSFORMATION (deduplication & timestamp formatting)...");
             
             setTimeout(() => {
-              setNodeStatuses(prev => ({ ...prev, load_orders_bq: 'healthy', bq_row_count_check: 'running' }));
-              addLog("success", "BigQuery Load completed: 300 rows successfully loaded into fct_orders.");
-              addLog("info", "Executing task: check_orders_row_count (BigQuery row assert check)...");
+              setNodeStatuses(prev => ({ ...prev, transform_data: 'healthy', load_data: 'running' }));
+              addLog("success", "TRANSFORMATION complete: Clean analytical models generated.");
+              addLog("info", "Executing Stage 4: LOAD (committing tables to Storage / BigQuery)...");
               
               setTimeout(() => {
-                setNodeStatuses(prev => ({ ...prev, bq_row_count_check: 'healthy', agent_monitor: 'running' }));
-                addLog("success", "BigQuery check PASSED: Row count falls within expected bounds.");
-                addLog("info", "Executing task: agent_monitor (post-load pipeline telemetry review)...");
+                setNodeStatuses(prev => ({ ...prev, load_data: 'healthy', agent_monitoring: 'running' }));
+                addLog("success", "LOAD complete: 300 orders & 1,200 events committed to target storage.");
+                addLog("info", "Executing Stage 5: MONITORING (logging metrics & heartbeat)...");
                 
                 setTimeout(() => {
-                  setNodeStatuses(prev => ({ ...prev, agent_monitor: 'healthy' }));
+                  setNodeStatuses(prev => ({ ...prev, agent_monitoring: 'healthy' }));
                   setPipelineStatus('healthy');
-                  addLog("success", "E2E Pipeline run completed successfully!");
-                  addLog("success", "All steps are healthy. Pipeline execution status: GREEN.");
+                  addLog("success", "E2E Self-Healing Pipeline run completed with status SUCCESS!");
                   setIsSimulationActive(false);
-                }, 1200);
-              }, 1200);
-            }, 1200);
-          }, 1200);
-        }, 1200);
-      }, 1200);
-    }, 1500);
-  };
-
-  // Run single node task execution in inspector
-  const handleRunSingleStep = (nodeId: string) => {
-    setNodeStatuses(prev => ({ ...prev, [nodeId]: 'running' }));
-    addLog("info", `Manually triggering task run: ${nodeId}...`);
-    
-    setTimeout(() => {
-      const finalStatus = activeFault && nodeId === (activeFault === 'schema_drift' ? 'validate_schema' : 'validate_quality') ? 'failed' : 'healthy';
-      setNodeStatuses(prev => ({ ...prev, [nodeId]: finalStatus }));
-      
-      if (finalStatus === 'failed') {
-        addLog("error", `Task ${nodeId} execution failed!`);
-        setPipelineStatus('failed');
-      } else {
-        addLog("success", `Task ${nodeId} executed successfully.`);
-      }
+                }, 1000);
+              }, 1000);
+            }, 1000);
+          }, 1000);
+        }, 1000);
+      }, 1000);
     }, 1200);
   };
 
   // Inject a fault manually
-  const handleInjectFault = (type: string) => {
+  const handleInjectFault = (faultId: string) => {
     if (activeFault || isSimulationActive) return; 
 
-    setActiveFault(type);
+    const fault = faultScenarios.find(f => f.id === faultId);
+    if (!fault) return;
+
+    setActiveFault(faultId);
     setPipelineStatus('failed');
 
-    let newIncident: Incident;
-    
-    if (type === 'schema_drift') {
-      newIncident = {
-        id: `inc-${Math.floor(1000 + Math.random() * 9000)}`,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-        task_id: "validate_schema",
-        fault_category: "Schema Drift",
-        severity: "high",
-        status: "pending_approval",
-        evidence: "Field 'price' expected FLOAT, got STRING (e.g. '$14.99') | Total drifted rows: 100% of batch",
-        root_cause: "Upstream API modification without notification (price field formatting).",
-        proposed_action: "Quarantine batch, create schema evolution log, and escalate alert."
-      };
-      setActiveNode("validate_schema");
-      setNodeStatuses(prev => ({ ...prev, validate_schema: 'failed', validate_quality: 'idle', load_orders_bq: 'idle', bq_row_count_check: 'idle', agent_monitor: 'idle' }));
-      addLog("error", "Task validate_schema failed! Schema drift detected in products.csv.");
-      addLog("warn", "Field 'price' expected type FLOAT, got STRING (e.g. '$14.99').");
-    } else if (type === 'null_spike') {
-      newIncident = {
-        id: `inc-${Math.floor(1000 + Math.random() * 9000)}`,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-        task_id: "validate_quality",
-        fault_category: "Null Spike",
-        severity: "high",
-        status: "pending_approval",
-        evidence: "Field 'customer_id' contains 14.5% NULL values | Threshold SLA: 0.0%",
-        root_cause: "Database extraction failure on client export.",
-        proposed_action: "Halt transaction pipeline, quarantine table, and raise ticket."
-      };
-      setActiveNode("validate_quality");
-      setNodeStatuses(prev => ({ ...prev, validate_quality: 'failed', load_orders_bq: 'idle', bq_row_count_check: 'idle', agent_monitor: 'idle' }));
-      addLog("error", "Task validate_quality failed! Null spike detected in customer_id.");
-      addLog("warn", "Field 'customer_id' contains 14.5% null values.");
-    } else {
-      newIncident = {
-        id: `inc-${Math.floor(1000 + Math.random() * 9000)}`,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-        task_id: "validate_quality",
-        fault_category: "Referential Breakage",
-        severity: "high",
-        status: "pending_approval",
-        evidence: "Staged orders reference customer_id 'C-9988' which does not exist in dim_customers.",
-        root_cause: "Stale dimensions sync in upstream source.",
-        proposed_action: "Quarantine missing reference records, generate surrogate logs, and load clean rows."
-      };
-      setActiveNode("validate_quality");
-      setNodeStatuses(prev => ({ ...prev, validate_quality: 'failed', load_orders_bq: 'idle', bq_row_count_check: 'idle', agent_monitor: 'idle' }));
-      addLog("error", "Task validate_quality failed! Referential key constraint violation.");
-      addLog("warn", "Missing reference: C-9988 not found in dim_customers.");
-    }
+    const newIncident: Incident = {
+      id: `INC-20260601-${Math.floor(1000 + Math.random() * 9000)}`,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      task_id: fault.task,
+      dataset: fault.dataset,
+      fault_category: fault.name.toUpperCase().replace(' ', '_'),
+      severity: fault.risk === 'high' ? 'high' : 'medium',
+      status: "pending_approval",
+      observed: `Fault trigger: ${fault.name} in ${fault.dataset}. ${fault.desc}`,
+      expected: "Healthy baseline contract assertions passed",
+      evidence: `Diagnostic check triggered for ${fault.id}: ${fault.desc}`,
+      hypothesis: `Injected simulation scenario for ${fault.name}`,
+      confidence: "97.8%",
+      blast_radius: `${fault.risk.toUpperCase()} risk impact on ${fault.dataset} downstream analytics`,
+      action: fault.action,
+      remediation: fault.action === 'AUTO_FIX' 
+        ? `Execute automated self-healing fix for ${fault.name}`
+        : `Escalate incident to on-call engineer for manual review`,
+      verification: "Assert contract rules on target table",
+    };
 
-    setIncidents(prev => [newIncident, ...prev.filter(i => i.task_id !== newIncident.task_id)]);
+    setIncidents(prev => [newIncident, ...prev.filter(i => i.task_id !== fault.task)]);
+    setActiveNode(fault.task);
     setTelemetryOpen(true);
     setActiveTab('logs');
+    
+    addLog("error", `Fault Injected: ${fault.name} in task ${fault.task}!`);
+    addLog("warn", fault.desc);
+    addLog("info", `AI Policy Gate Evaluated: Action set to ${fault.action}`);
   };
 
   // Resolve / Approve incident
@@ -585,35 +647,39 @@ function App() {
     if (!incident) return;
 
     setIsProcessing(id);
-    addLog("info", `User approved remediation for incident ${id}.`);
-    addLog("info", `Executing action: ${incident.proposed_action}`);
+    addLog("info", `User approved self-healing remediation for incident ${id}.`);
+    addLog("info", `Executing action: ${incident.remediation}`);
 
     setTimeout(() => {
-      addLog("success", "BigQuery session initialized with Service Account 'pipeline-intern-samri'.");
-      addLog("info", `Running target cleanup query for ${incident.task_id}...`);
+      addLog("success", "Remediation engine initialized.");
+      addLog("info", `Applying automated fix for ${incident.fault_category} on dataset '${incident.dataset}'...`);
       
       setTimeout(() => {
-        addLog("success", "Query execution complete. Quarantined drifted/failed records successfully.");
-        addLog("info", "Running post-remediation validations...");
+        addLog("success", "Fix executed successfully. Post-remediation verification running...");
         
         setTimeout(() => {
-          addLog("success", "Validation PASSED. All data quality indicators are healthy.");
-          addLog("success", `Pipeline resumed. Incident ${id} resolved.`);
+          addLog("success", "Verification PASSED. All data quality indicators restored to HEALTHY.");
+          addLog("success", `Pipeline resumed. Incident ${id} status updated to REMEDIATED.`);
 
-          // Move incident to resolved
           setIncidents(prev => prev.map(inc => inc.id === id ? { ...inc, status: "remediated" } : inc));
           setRemediations(prev => [
             {
               id: `rem-${Math.floor(100 + Math.random() * 900)}`,
               time: new Date().toISOString().replace('T', ' ').substring(0, 19),
               fault: incident.fault_category,
-              target: incident.task_id === 'validate_schema' ? 'dim_products' : 'fct_orders',
-              method: incident.fault_category.includes("Spike") ? "Idempotent Cleanse" : "Type Coercion",
-              duration: "3.8s",
+              target: incident.dataset,
+              method: incident.action === 'AUTO_FIX' ? "Automated Self-Healing" : "Guided Patch",
+              duration: "3.2s",
               status: "success"
             },
             ...prev
           ]);
+
+          setMetrics(prev => ({
+            ...prev,
+            activeIncidents: Math.max(0, prev.activeIncidents - 1),
+            remediatedIncidents: prev.remediatedIncidents + 1
+          }));
 
           setIsProcessing(null);
           setActiveFault(null);
@@ -623,72 +689,15 @@ function App() {
     }, 1000);
   };
 
-  // Decline incident
   const handleDeclineIncident = (id: string) => {
-    setIncidents(prev => prev.filter(inc => inc.id !== id));
-    addLog("warn", `Incident ${id} declined/dismissed by user. Escalation terminated.`);
+    setIncidents(prev => prev.map(inc => inc.id === id ? { ...inc, status: "escalated" } : inc));
+    addLog("warn", `Incident ${id} escalated to human engineer review queue.`);
     setActiveFault(null);
     setPipelineStatus('healthy');
   };
 
-  // Format visual badges for schema data types
   const renderDataTypeBadge = (type: string) => {
     return <span className="schema-type">{type.toUpperCase()}</span>;
-  };
-
-  // Dynamic SVG Area Chart render
-  const renderStatsChart = () => {
-    const eventsData = [1210, 1195, 1250, 1180, 1200, 1220, 1205];
-    const maxVal = 1500;
-    
-    // Generate points for Orders
-    const pointsOrders = volumeData.map((item, idx) => {
-      const x = idx * (360 / 6);
-      const y = 80 - (item.count / maxVal) * 70;
-      return { x, y };
-    });
-    const lineOrdersD = pointsOrders.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    const areaOrdersD = `${lineOrdersD} L ${pointsOrders[pointsOrders.length - 1].x} 90 L ${pointsOrders[0].x} 90 Z`;
-    
-    // Generate points for Events
-    const pointsEvents = eventsData.map((val, idx) => {
-      const x = idx * (360 / 6);
-      const y = 80 - (val / maxVal) * 70;
-      return { x, y };
-    });
-    const lineEventsD = pointsEvents.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    
-    return (
-      <div className="drawer-chart-container">
-        <svg className="chart-svg-layer" viewBox="0 0 360 90" preserveAspectRatio="none">
-          <defs>
-            <linearGradient id="area-grad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.3" />
-              <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.0" />
-            </linearGradient>
-          </defs>
-          
-          {/* Grid lines */}
-          <line x1="0" y1="10" x2="360" y2="10" stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
-          <line x1="0" y1="45" x2="360" y2="45" stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
-          <line x1="0" y1="80" x2="360" y2="80" stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
-          
-          {/* Area fill for Orders */}
-          <path d={areaOrdersD} className="chart-gradient-path" />
-          
-          {/* Line for Orders */}
-          <path d={lineOrdersD} className="chart-line-path" />
-          
-          {/* Line for Events */}
-          <path d={lineEventsD} className="chart-events-line-path" />
-          
-          {/* Data points dots */}
-          {pointsOrders.map((p, idx) => (
-            <circle key={`ord-${idx}`} cx={p.x} cy={p.y} r="2.5" fill="var(--accent)" stroke="#ffffff" strokeWidth="1" />
-          ))}
-        </svg>
-      </div>
-    );
   };
 
   const selectedNodeInfo = pipelineNodes.find(n => n.id === activeNode);
@@ -696,18 +705,28 @@ function App() {
 
   return (
     <div className={`app-container ${theme}-theme`}>
-      {/* Qlik-Style Dark Sidebar */}
+      {/* Sidebar Nav */}
       <aside className="sidebar">
         <div className="top-part">
           <div className="logo-section">
             <Activity className="logo-icon" size={20} />
-            <span className="logo-text">Qlik Flow</span>
+            <span className="logo-text">Data Pipeline AI</span>
           </div>
 
           <nav className="nav-links">
-            <div className="nav-item active">
-              <Server size={16} />
-              Pipeline Canvas
+            <div 
+              className={`nav-item ${viewMode === 'overview' ? 'active' : ''}`}
+              onClick={() => setViewMode('overview')}
+            >
+              <GitBranch size={16} />
+              Live System Flow
+            </div>
+            <div 
+              className={`nav-item ${viewMode === 'canvas' ? 'active' : ''}`}
+              onClick={() => setViewMode('canvas')}
+            >
+              <Layers size={16} />
+              DAG Node Canvas
             </div>
             <div 
               className="nav-item" 
@@ -717,7 +736,7 @@ function App() {
               }}
             >
               <Database size={16} />
-              Metrics & Volumes
+              Telemetry & Volume
             </div>
             <div 
               className="nav-item"
@@ -726,14 +745,13 @@ function App() {
                 setActiveTab('remediations');
               }}
             >
-              <RefreshCw size={16} />
-              Remediations
+              <ShieldCheck size={16} />
+              Remediation History
             </div>
           </nav>
         </div>
 
         <div>
-          {/* Theme Toggle Button */}
           <div className="sidebar-controls">
             <button 
               className="theme-toggle-btn"
@@ -742,12 +760,12 @@ function App() {
               {theme === 'light' ? (
                 <>
                   <Moon size={13} />
-                  <span>Switch to Dark Mode</span>
+                  <span>Dark Mode</span>
                 </>
               ) : (
                 <>
                   <Sun size={13} />
-                  <span>Switch to Light Mode</span>
+                  <span>Light Mode</span>
                 </>
               )}
             </button>
@@ -755,7 +773,7 @@ function App() {
           
           <div className="sidebar-footer">
             <div>Self-Healing Pipeline</div>
-            <div style={{ color: 'var(--accent)', marginTop: '2px', fontWeight: 600 }}>Active Workspace</div>
+            <div style={{ color: 'var(--accent)', marginTop: '2px', fontWeight: 600 }}>Airflow LocalExecutor</div>
           </div>
         </div>
       </aside>
@@ -765,242 +783,437 @@ function App() {
         {/* Header bar */}
         <header className="header">
           <div className="header-title">
-            <h1>Pipeline Diagnostics Canvas</h1>
-            <p>Visual orchestrator & self-healing controller</p>
+            <h1>Self-Healing Data Pipeline Control Center</h1>
+            <p>Production Airflow DAG Monitor & AI Self-Healing Engine</p>
           </div>
 
-          <div className={`status-badge ${pipelineStatus === 'healthy' ? 'healthy' : pipelineStatus === 'anomaly' ? 'anomaly' : 'failed'}`}>
-            <span className="pulse-dot"></span>
-            {pipelineStatus === 'healthy' && 'Pipeline Healthy'}
-            {pipelineStatus === 'anomaly' && 'Anomaly Flagged'}
-            {pipelineStatus === 'failed' && 'Task Failure'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div className="view-mode-tabs">
+              <button 
+                className={`view-mode-btn ${viewMode === 'overview' ? 'active' : ''}`}
+                onClick={() => setViewMode('overview')}
+              >
+                Overview Flow
+              </button>
+              <button 
+                className={`view-mode-btn ${viewMode === 'canvas' ? 'active' : ''}`}
+                onClick={() => setViewMode('canvas')}
+              >
+                Interactive Canvas
+              </button>
+            </div>
+
+            <div className={`status-badge ${pipelineStatus === 'healthy' ? 'healthy' : pipelineStatus === 'anomaly' ? 'anomaly' : 'failed'}`}>
+              <span className="pulse-dot"></span>
+              {pipelineStatus === 'healthy' && 'Pipeline Healthy'}
+              {pipelineStatus === 'anomaly' && 'Anomaly Detected'}
+              {pipelineStatus === 'failed' && 'Task Failure'}
+            </div>
           </div>
         </header>
 
-        {/* Fault Injection Control Bar */}
-        <div className="workspace-toolbar">
-          <div className="toolbar-section">
-            <span className="toolbar-label">Simulation Control</span>
-            <button 
-              className="fault-pill btn-control-play"
-              onClick={runPipelineSimulation}
-              disabled={isSimulationActive}
-            >
-              {isSimulationActive ? (
-                <>
-                  <RefreshCw size={12} className="animate-spin" />
-                  <span>Simulating...</span>
-                </>
-              ) : (
-                <>
-                  <Play size={12} fill="currentColor" />
-                  <span>Run Pipeline</span>
-                </>
-              )}
-            </button>
-            
-            <div className="toolbar-divider"></div>
-            <span className="toolbar-label">Faults Injection</span>
-            
-            <button 
-              className={`fault-pill ${activeFault === 'schema_drift' ? 'active' : ''}`}
-              onClick={() => handleInjectFault('schema_drift')}
-              disabled={activeFault !== null || isSimulationActive}
-            >
-              Schema Drift
-            </button>
-            <button 
-              className={`fault-pill ${activeFault === 'null_spike' ? 'active' : ''}`}
-              onClick={() => handleInjectFault('null_spike')}
-              disabled={activeFault !== null || isSimulationActive}
-            >
-              Null Spike
-            </button>
-            <button 
-              className={`fault-pill ${activeFault === 'ref_break' ? 'active' : ''}`}
-              onClick={() => handleInjectFault('ref_break')}
-              disabled={activeFault !== null || isSimulationActive}
-            >
-              Referential Break
-            </button>
+        {/* Compact Pipeline Metrics Bar (Requirement 4) */}
+        <div className="metrics-summary-bar">
+          <div className="metric-card">
+            <div className="metric-title"><Clock size={11} /> Last Pipeline Run</div>
+            <div className="metric-val" style={{ fontSize: '13px' }}>{metrics.lastRun}</div>
           </div>
-
-          <div className="toolbar-section">
-            <button 
-              className="fault-pill" 
-              onClick={() => setTelemetryOpen(!telemetryOpen)}
-            >
-              <Terminal size={12} />
-              {telemetryOpen ? 'Hide Drawer' : 'Show Drawer'}
-            </button>
+          <div className="metric-card">
+            <div className="metric-title"><Activity size={11} /> Current Status</div>
+            <div className="metric-val" style={{ color: pipelineStatus === 'healthy' ? 'var(--healthy)' : 'var(--failed)' }}>
+              {pipelineStatus.toUpperCase()}
+            </div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-title"><AlertTriangle size={11} /> Active Incidents</div>
+            <div className="metric-val" style={{ color: incidents.filter(i => i.status === 'pending_approval').length > 0 ? '#f59e0b' : 'var(--text-primary)' }}>
+              {incidents.filter(i => i.status === 'pending_approval').length}
+            </div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-title"><CheckCircle2 size={11} /> Successful Runs</div>
+            <div className="metric-val" style={{ color: 'var(--healthy)' }}>{metrics.successfulRuns}</div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-title"><AlertCircle size={11} /> Failed Runs</div>
+            <div className="metric-val" style={{ color: metrics.failedRuns > 0 ? '#ef4444' : 'var(--text-primary)' }}>
+              {metrics.failedRuns}
+            </div>
+          </div>
+          <div className="metric-card">
+            <div className="metric-title"><ShieldCheck size={11} /> Remediated</div>
+            <div className="metric-val" style={{ color: 'var(--accent)' }}>{metrics.remediatedIncidents}</div>
           </div>
         </div>
 
-        {/* Workspace Canvas (Dotted Grid with SVG Connection Overlay) */}
-        <div className="canvas-workspace">
-          <div className="pipeline-flow">
-            {/* Dynamic Bezier SVG Connection Layer */}
-            <svg className="pipeline-svg-connections">
-              {connections.map((conn, idx) => (
-                <path 
-                  key={idx}
-                  d={conn.path}
-                  className={`pipeline-connection-path ${conn.status}`}
-                />
-              ))}
-            </svg>
-            
-            {/* Column 1: Sources */}
-            <div className="flow-column">
-              <div className="flow-link-label" style={{ top: '-14px' }}>Data Sources</div>
+        {/* Fault Injection Panel (Requirement 8) */}
+        <div className="live-flow-container" style={{ padding: '12px 16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Cpu size={13} /> Fault Injection Control Panel (6 Scenarios)
+            </span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                className="fault-pill btn-control-play"
+                onClick={runPipelineSimulation}
+                disabled={isSimulationActive}
+              >
+                {isSimulationActive ? (
+                  <>
+                    <RefreshCw size={12} className="animate-spin" />
+                    <span>Simulating...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play size={12} fill="currentColor" />
+                    <span>Trigger DAG Run</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div className="fault-grid-container">
+            {faultScenarios.map(fault => (
+              <button
+                key={fault.id}
+                className={`fault-card-btn ${activeFault === fault.id ? 'active' : ''}`}
+                onClick={() => handleInjectFault(fault.id)}
+                disabled={activeFault !== null || isSimulationActive}
+              >
+                <div className="fault-head">
+                  <span className="fault-name">{fault.name}</span>
+                  <span className={`risk-pill ${fault.risk}`}>{fault.risk}</span>
+                </div>
+                <span className="fault-desc">{fault.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* VIEW MODE 1: Live Pipeline Flow View (Requirement 9) */}
+        {viewMode === 'overview' && (
+          <div className="live-flow-container">
+            <div className="live-flow-header">
+              <div>
+                <h2><GitBranch size={16} color="var(--accent)" /> 5-Second System Architecture Flow Overview</h2>
+                <p>Complete end-to-end data ingestion, validation, and self-healing lifecycle</p>
+              </div>
+            </div>
+
+            <div className="flow-diagram-wrapper">
+              {/* Row 1: Primary Pipeline Flow */}
+              <div className="flow-path-row">
+                <span className="flow-path-label success">Primary Flow</span>
+                
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">RAW DATA</span>
+                    <span className="step-sub">CSV / JSONL</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box active">
+                    <span className="step-title">AIRFLOW</span>
+                    <span className="step-sub">LocalExecutor</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">INGEST</span>
+                    <span className="step-sub">Stage Files</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">VALIDATE</span>
+                    <span className="step-sub">Schema & Quality</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">TRANSFORM</span>
+                    <span className="step-sub">Clean Models</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">LOAD</span>
+                    <span className="step-sub">Storage / BQ</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box success">
+                    <span className="step-title">MONITOR</span>
+                    <span className="step-sub">Heartbeat Log</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Self-Healing Branching Path */}
+              <div className="flow-path-row" style={{ backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: '8px', padding: '10px' }}>
+                <span className="flow-path-label healing">Healing Flow</span>
+                
+                <div className="flow-node-step">
+                  <div className="flow-step-box danger">
+                    <span className="step-title">FAILURE</span>
+                    <span className="step-sub">Validation Assert</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">INCIDENT</span>
+                    <span className="step-sub">Failure Report</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box active">
+                    <span className="step-title">AI AGENT</span>
+                    <span className="step-sub">Diagnosis Engine</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">POLICY GATE</span>
+                    <span className="step-sub">Auto vs Escalate</span>
+                  </div>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step" style={{ flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span className="policy-badge auto-fix">AUTO-FIX</span>
+                    <span className="flow-arrow">→</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-primary)', fontWeight: 600 }}>REMEDIATE → VERIFY → RESOLVED</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span className="policy-badge escalate">ESCALATE</span>
+                    <span className="flow-arrow">→</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-primary)', fontWeight: 600 }}>HUMAN REVIEW → PENDING</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW MODE 2: Interactive Airflow DAG Canvas (Requirement 2 & 3) */}
+        {viewMode === 'canvas' && (
+          <div className="canvas-workspace">
+            <div className="pipeline-flow">
+              <svg className="pipeline-svg-connections">
+                {connections.map((conn, idx) => (
+                  <path 
+                    key={idx}
+                    d={conn.path}
+                    className={`pipeline-connection-path ${conn.status}`}
+                  />
+                ))}
+              </svg>
               
-              <div 
-                data-node-id="source_customers"
-                className={`node-card info ${activeNode === 'source_customers' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('source_customers')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><Database size={14} /></div>
-                  <div className="node-status-dot"></div>
+              {/* Column 1: Sources */}
+              <div className="flow-column">
+                <div className="flow-link-label" style={{ top: '-14px' }}>Data Sources</div>
+                
+                <div 
+                  data-node-id="source_customers"
+                  className={`node-card info ${activeNode === 'source_customers' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('source_customers')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Database size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px', color: '#94a3b8', backgroundColor: 'transparent' }}>
+                      {nodeDurations['source_customers']}
+                    </span>
+                  </div>
+                  <h3 className="node-title">customers.csv</h3>
+                  <p className="node-subtitle">Staged Dimensions</p>
                 </div>
-                <h3 className="node-title">customers.csv</h3>
-                <p className="node-subtitle">Staged Dimensions</p>
+
+                <div 
+                  data-node-id="source_products"
+                  className={`node-card info ${activeNode === 'source_products' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('source_products')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Database size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px', color: '#94a3b8', backgroundColor: 'transparent' }}>
+                      {nodeDurations['source_products']}
+                    </span>
+                  </div>
+                  <h3 className="node-title">products.csv</h3>
+                  <p className="node-subtitle">Staged Dimensions</p>
+                </div>
               </div>
 
-              <div 
-                data-node-id="source_products"
-                className={`node-card info ${activeNode === 'source_products' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('source_products')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><Database size={14} /></div>
-                  <div className="node-status-dot"></div>
+              {/* Column 2: Ingestion Stage */}
+              <div className="flow-column">
+                <div className="flow-link-label" style={{ top: '-14px' }}>INGESTION</div>
+
+                <div 
+                  data-node-id="ingest_dimensions"
+                  className={`node-card ${nodeStatuses['ingest_dimensions'] || 'idle'} ${activeNode === 'ingest_dimensions' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('ingest_dimensions')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Server size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['ingest_dimensions']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['ingest_dimensions']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Ingest Dimensions</h3>
+                  <p className="node-subtitle">Task Group: ingestion</p>
                 </div>
-                <h3 className="node-title">products.csv</h3>
-                <p className="node-subtitle">Staged Dimensions</p>
+
+                <div 
+                  data-node-id="ingest_orders"
+                  className={`node-card ${nodeStatuses['ingest_orders'] || 'idle'} ${activeNode === 'ingest_orders' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('ingest_orders')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Server size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['ingest_orders']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['ingest_orders']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Ingest Orders</h3>
+                  <p className="node-subtitle">Task Group: ingestion</p>
+                </div>
+
+                <div 
+                  data-node-id="ingest_events"
+                  className={`node-card ${nodeStatuses['ingest_events'] || 'idle'} ${activeNode === 'ingest_events' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('ingest_events')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Server size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['ingest_events']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['ingest_events']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Ingest Events</h3>
+                  <p className="node-subtitle">Task Group: ingestion</p>
+                </div>
               </div>
+
+              {/* Column 3: Validation Stage */}
+              <div className="flow-column">
+                <div className="flow-link-label" style={{ top: '-14px' }}>VALIDATION</div>
+
+                <div 
+                  data-node-id="validate_schema"
+                  className={`node-card ${nodeStatuses['validate_schema'] || 'idle'} ${activeNode === 'validate_schema' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('validate_schema')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><FileCode2 size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['validate_schema']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['validate_schema']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Validate Schema</h3>
+                  <p className="node-subtitle">Task Group: validation</p>
+                </div>
+
+                <div 
+                  data-node-id="validate_quality"
+                  className={`node-card ${nodeStatuses['validate_quality'] || 'idle'} ${activeNode === 'validate_quality' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('validate_quality')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><AlertTriangle size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['validate_quality']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['validate_quality']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Validate Quality</h3>
+                  <p className="node-subtitle">Task Group: validation</p>
+                </div>
+              </div>
+
+              {/* Column 4: Transformation Stage */}
+              <div className="flow-column">
+                <div className="flow-link-label" style={{ top: '-14px' }}>TRANSFORM</div>
+
+                <div 
+                  data-node-id="transform_data"
+                  className={`node-card ${nodeStatuses['transform_data'] || 'idle'} ${activeNode === 'transform_data' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('transform_data')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Layers size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['transform_data']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['transform_data']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Transform Data</h3>
+                  <p className="node-subtitle">Task Group: transformation</p>
+                </div>
+              </div>
+
+              {/* Column 5: Load Stage */}
+              <div className="flow-column">
+                <div className="flow-link-label" style={{ top: '-14px' }}>LOAD</div>
+
+                <div 
+                  data-node-id="load_data"
+                  className={`node-card ${nodeStatuses['load_data'] || 'idle'} ${activeNode === 'load_data' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('load_data')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Database size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['load_data']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['load_data']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Load to Storage / BQ</h3>
+                  <p className="node-subtitle">Task Group: load</p>
+                </div>
+              </div>
+
+              {/* Column 6: Monitoring Stage */}
+              <div className="flow-column">
+                <div className="flow-link-label" style={{ top: '-14px' }}>MONITORING</div>
+
+                <div 
+                  data-node-id="agent_monitoring"
+                  className={`node-card ${nodeStatuses['agent_monitoring'] || 'idle'} ${activeNode === 'agent_monitoring' ? 'selected' : ''}`}
+                  onClick={() => setActiveNode('agent_monitoring')}
+                >
+                  <div className="node-header">
+                    <div className="node-icon-wrapper"><Activity size={14} /></div>
+                    <span className="rem-history-badge" style={{ margin: 0, fontSize: '8px' }}>
+                      {nodeStatuses['agent_monitoring']?.toUpperCase() || 'SUCCESS'} ({nodeDurations['agent_monitoring']})
+                    </span>
+                  </div>
+                  <h3 className="node-title">Agent Monitoring</h3>
+                  <p className="node-subtitle">Task Group: monitoring</p>
+                </div>
+              </div>
+
             </div>
-
-            {/* Column 2: Ingestion */}
-            <div className="flow-column">
-              <div className="flow-link-label" style={{ top: '-14px' }}>Ingestion</div>
-
-              <div 
-                data-node-id="ingest_orders"
-                className={`node-card ${nodeStatuses['ingest_orders'] || 'idle'} ${activeNode === 'ingest_orders' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('ingest_orders')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><Server size={14} /></div>
-                  <div className="node-status-dot"></div>
-                </div>
-                <h3 className="node-title">Ingest Orders</h3>
-                <p className="node-subtitle">orders_{`{date}`}.csv</p>
-              </div>
-
-              <div 
-                data-node-id="ingest_events"
-                className={`node-card ${nodeStatuses['ingest_events'] || 'idle'} ${activeNode === 'ingest_events' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('ingest_events')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><Server size={14} /></div>
-                  <div className="node-status-dot"></div>
-                </div>
-                <h3 className="node-title">Ingest Events</h3>
-                <p className="node-subtitle">events_{`{date}`}.jsonl</p>
-              </div>
-            </div>
-
-            {/* Column 3: Quality Audits */}
-            <div className="flow-column">
-              <div className="flow-link-label" style={{ top: '-14px' }}>Quality Audits</div>
-
-              <div 
-                data-node-id="validate_schema"
-                className={`node-card ${nodeStatuses['validate_schema'] || 'idle'} ${activeNode === 'validate_schema' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('validate_schema')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><FileCode2 size={14} /></div>
-                  <div className="node-status-dot"></div>
-                </div>
-                <h3 className="node-title">Validate Schema</h3>
-                <p className="node-subtitle">Structure Checks</p>
-              </div>
-
-              <div 
-                data-node-id="validate_quality"
-                className={`node-card ${nodeStatuses['validate_quality'] || 'idle'} ${activeNode === 'validate_quality' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('validate_quality')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><AlertTriangle size={14} /></div>
-                  <div className="node-status-dot"></div>
-                </div>
-                <h3 className="node-title">Validate Quality</h3>
-                <p className="node-subtitle">Values & Null Audits</p>
-              </div>
-            </div>
-
-            {/* Column 4: Warehouse Load */}
-            <div className="flow-column">
-              <div className="flow-link-label" style={{ top: '-14px' }}>Storage</div>
-
-              <div 
-                data-node-id="load_orders_bq"
-                className={`node-card ${nodeStatuses['load_orders_bq'] || 'idle'} ${activeNode === 'load_orders_bq' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('load_orders_bq')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><Database size={14} /></div>
-                  <div className="node-status-dot"></div>
-                </div>
-                <h3 className="node-title">Load Orders BQ</h3>
-                <p className="node-subtitle">BigQuery Load</p>
-              </div>
-            </div>
-
-            {/* Column 5: Post-Load check */}
-            <div className="flow-column">
-              <div className="flow-link-label" style={{ top: '-14px' }}>Assertions</div>
-
-              <div 
-                data-node-id="bq_row_count_check"
-                className={`node-card ${nodeStatuses['bq_row_count_check'] || 'idle'} ${activeNode === 'bq_row_count_check' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('bq_row_count_check')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><CheckCircle2 size={14} /></div>
-                  <div className="node-status-dot"></div>
-                </div>
-                <h3 className="node-title">Row Count Check</h3>
-                <p className="node-subtitle">Declarative SQL</p>
-              </div>
-            </div>
-
-            {/* Column 6: Diagnostics */}
-            <div className="flow-column">
-              <div className="flow-link-label" style={{ top: '-14px' }}>Agent</div>
-
-              <div 
-                data-node-id="agent_monitor"
-                className={`node-card ${nodeStatuses['agent_monitor'] || 'idle'} ${activeNode === 'agent_monitor' ? 'selected' : ''}`}
-                onClick={() => setActiveNode('agent_monitor')}
-              >
-                <div className="node-header">
-                  <div className="node-icon-wrapper"><Activity size={14} /></div>
-                  <div className="node-status-dot"></div>
-                </div>
-                <h3 className="node-title">Agent Monitor</h3>
-                <p className="node-subtitle">Remediation Loop</p>
-              </div>
-            </div>
-
           </div>
-        </div>
+        )}
 
-        {/* Right side slide-over Configuration Inspector */}
+        {/* Right slide-over Inspector (Requirements 5, 6, 7) */}
         {selectedNodeInfo && (
           <aside className={`inspector-panel ${selectedNodeInfo ? 'open' : ''}`}>
             <div className="inspector-header">
@@ -1014,7 +1227,7 @@ function App() {
             </div>
 
             <div className="inspector-content">
-              {/* Active Incident Warning box */}
+              {/* Incident Inspector (Requirement 5 & 6 & 7) */}
               {activeIncident ? (
                 <div className={`inspector-incident-card ${activeIncident.severity === 'medium' ? 'warning' : ''}`}>
                   <div className="incident-badge-row">
@@ -1023,62 +1236,105 @@ function App() {
                       Incident {activeIncident.id}
                     </span>
                     <span className={`severity-pill ${activeIncident.severity}`}>
-                      {activeIncident.severity}
+                      {activeIncident.severity.toUpperCase()}
                     </span>
                   </div>
 
-                  <p style={{ margin: '0 0 6px 0', fontSize: '11px', fontWeight: 600 }}>Diagnostic Evidence:</p>
-                  <div className="incident-evidence-box">
-                    {activeIncident.evidence}
+                  {/* AI Agent Structured Diagnostic Display (Requirement 6) */}
+                  <div className="diagnostic-stepper">
+                    <div className="diagnostic-step">
+                      <span className="step-label"><Eye size={11} /> OBSERVED:</span>
+                      <span className="step-value">{activeIncident.observed}</span>
+                    </div>
+                    <div className="diagnostic-step">
+                      <span className="step-label"><Check size={11} /> EXPECTED:</span>
+                      <span className="step-value">{activeIncident.expected}</span>
+                    </div>
+                    <div className="diagnostic-step">
+                      <span className="step-label"><FileCode2 size={11} /> EVIDENCE:</span>
+                      <span className="step-value">{activeIncident.evidence}</span>
+                    </div>
+                    <div className="diagnostic-step">
+                      <span className="step-label"><Cpu size={11} /> HYPOTHESIS:</span>
+                      <span className="step-value">{activeIncident.hypothesis}</span>
+                    </div>
+                    <div className="diagnostic-step">
+                      <span className="step-label"><Activity size={11} /> CONFIDENCE:</span>
+                      <span className="step-value" style={{ color: 'var(--healthy)', fontWeight: 700 }}>{activeIncident.confidence}</span>
+                    </div>
+                    <div className="diagnostic-step">
+                      <span className="step-label"><ShieldAlert size={11} /> BLAST RADIUS:</span>
+                      <span className="step-value">{activeIncident.blast_radius}</span>
+                    </div>
+                    <div className="diagnostic-step">
+                      <span className="step-label"><GitBranch size={11} /> ACTION:</span>
+                      <span className="step-value" style={{ color: activeIncident.action === 'AUTO_FIX' ? 'var(--healthy)' : 'var(--warning)', fontWeight: 700 }}>
+                        {activeIncident.action}
+                      </span>
+                    </div>
                   </div>
 
-                  <div style={{ fontSize: '11px', lineHeight: 1.4, color: 'var(--text-secondary)' }}>
-                    <p style={{ margin: '4px 0' }}><span style={{ fontWeight: 600 }}>Root Cause:</span> {activeIncident.root_cause}</p>
-                    <p style={{ margin: '4px 0' }}><span style={{ fontWeight: 600 }}>Proposed Fix:</span> {activeIncident.proposed_action}</p>
+                  {/* Policy Gate Flow Diagram (Requirement 7) */}
+                  <div className="policy-gate-box">
+                    <div className="policy-gate-title">
+                      <GitBranch size={13} color="var(--accent)" /> Policy Gate Evaluation Flow
+                    </div>
+                    {activeIncident.action === 'AUTO_FIX' ? (
+                      <div className="policy-branch-flow">
+                        <span className="policy-badge auto-fix">AUTO_FIX</span>
+                        <span>→ Diagnosis</span>
+                        <span>→ Policy Gate</span>
+                        <span>→ Remediation</span>
+                        <span>→ Verification</span>
+                        <span style={{ color: 'var(--healthy)', fontWeight: 700 }}>→ Resolved</span>
+                      </div>
+                    ) : (
+                      <div className="policy-branch-flow">
+                        <span className="policy-badge escalate">ESCALATE</span>
+                        <span>→ Diagnosis</span>
+                        <span>→ Policy Gate</span>
+                        <span>→ Human Review</span>
+                        <span style={{ color: 'var(--warning)', fontWeight: 700 }}>→ Pending</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="action-buttons-group">
-                    <button 
-                      className="btn btn-action-primary"
-                      onClick={() => handleApproveRemediation(activeIncident.id)}
-                      disabled={isProcessing === activeIncident.id}
-                    >
-                      {isProcessing === activeIncident.id ? (
-                        <>
-                          <RefreshCw size={12} className="animate-spin" />
-                          Executing...
-                        </>
-                      ) : (
-                        <>
-                          <UserCheck size={12} />
-                          Approve Fix
-                        </>
-                      )}
-                    </button>
-                    <button 
-                      className="btn btn-action-secondary"
-                      onClick={() => handleDeclineIncident(activeIncident.id)}
-                      disabled={isProcessing === activeIncident.id}
-                    >
-                      Dismiss
-                    </button>
+                    {activeIncident.action === 'AUTO_FIX' ? (
+                      <button 
+                        className="btn btn-action-primary"
+                        onClick={() => handleApproveRemediation(activeIncident.id)}
+                        disabled={isProcessing === activeIncident.id}
+                      >
+                        {isProcessing === activeIncident.id ? (
+                          <>
+                            <RefreshCw size={12} className="animate-spin" />
+                            Executing Remediation...
+                          </>
+                        ) : (
+                          <>
+                            <UserCheck size={12} />
+                            Execute Auto-Fix
+                          </>
+                        )}
+                      </button>
+                    ) : (
+                      <button 
+                        className="btn btn-action-primary"
+                        style={{ backgroundColor: 'var(--warning)', color: '#000000' }}
+                        onClick={() => handleDeclineIncident(activeIncident.id)}
+                      >
+                        <ShieldAlert size={12} />
+                        Escalate to Human
+                      </button>
+                    )}
                   </div>
                 </div>
-              ) : (
-                nodeStatuses[selectedNodeInfo.id] === 'failed' && (
-                  <div className="inspector-incident-card">
-                    <div style={{ fontSize: '12px', color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
-                      <AlertCircle size={14} />
-                      Execution Halted
-                    </div>
-                    <p style={{ fontSize: '11px', color: '#7f1d1d', margin: '4px 0 0 0' }}>This task failed. Check parent nodes or logs.</p>
-                  </div>
-                )
-              )}
+              ) : null}
 
-              {/* Node specifications */}
+              {/* Node Specifications & Rules */}
               <div className="inspector-section">
-                <h3 className="inspector-section-title">Configuration</h3>
+                <h3 className="inspector-section-title">Task Specification</h3>
                 
                 <div className="property-grid">
                   {selectedNodeInfo.details.source && (
@@ -1105,84 +1361,18 @@ function App() {
                       <span className="property-value">{selectedNodeInfo.details.freshnessSla}</span>
                     </div>
                   )}
-                  {selectedNodeInfo.details.targetTable && (
-                    <div className="property-row">
-                      <span className="property-label">Target BQ Table</span>
-                      <span className="property-value mono">{selectedNodeInfo.details.targetTable}</span>
-                    </div>
-                  )}
-                  {selectedNodeInfo.details.partitionBy && (
-                    <div className="property-row">
-                      <span className="property-label">Partition Field</span>
-                      <span className="property-value mono">{selectedNodeInfo.details.partitionBy}</span>
-                    </div>
-                  )}
-                  {selectedNodeInfo.details.clusterBy && (
-                    <div className="property-row">
-                      <span className="property-label">Cluster Field</span>
-                      <span className="property-value mono">{selectedNodeInfo.details.clusterBy}</span>
-                    </div>
-                  )}
-                  {selectedNodeInfo.details.mode && (
-                    <div className="property-row">
-                      <span className="property-label">Write Mode</span>
-                      <span className="property-value">{selectedNodeInfo.details.mode}</span>
-                    </div>
-                  )}
                   {selectedNodeInfo.details.description && (
                     <div className="property-row">
-                      <span className="property-label">Goal</span>
+                      <span className="property-label">Function</span>
                       <span className="property-value">{selectedNodeInfo.details.description}</span>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Quality rules */}
-              {(selectedNodeInfo.details.rule || selectedNodeInfo.details.nullTolerance || selectedNodeInfo.details.range || selectedNodeInfo.details.query) && (
-                <div className="inspector-section">
-                  <h3 className="inspector-section-title">Validation Rules</h3>
-                  <div className="property-grid">
-                    {selectedNodeInfo.details.rule && (
-                      <div className="property-row">
-                        <span className="property-label">Audit Engine</span>
-                        <span className="property-value">{selectedNodeInfo.details.rule}</span>
-                      </div>
-                    )}
-                    {selectedNodeInfo.details.nullTolerance && (
-                      <div className="property-row">
-                        <span className="property-label">Null Limit</span>
-                        <span className="property-value mono">{selectedNodeInfo.details.nullTolerance}</span>
-                      </div>
-                    )}
-                    {selectedNodeInfo.details.range && (
-                      <div className="property-row">
-                        <span className="property-label">Expected Row Bounds</span>
-                        <span className="property-value">{selectedNodeInfo.details.range}</span>
-                      </div>
-                    )}
-                    {selectedNodeInfo.details.referentialChecks && (
-                      <div className="property-row">
-                        <span className="property-label">Foreign Constraints</span>
-                        <span className="property-value mono">{selectedNodeInfo.details.referentialChecks}</span>
-                      </div>
-                    )}
-                    {selectedNodeInfo.details.query && (
-                      <div className="property-row" style={{ flexDirection: 'column', gap: '6px' }}>
-                        <span className="property-label">Check Operator SQL</span>
-                        <pre style={{ margin: 0, padding: '8px', backgroundColor: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: '4px', fontFamily: 'var(--mono)', fontSize: '10px', overflowX: 'auto', whiteSpace: 'pre-wrap', color: 'var(--text-primary)' }}>
-                          {selectedNodeInfo.details.query}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Node Schema Registry list */}
               {selectedNodeInfo.details.schema && (
                 <div className="inspector-section">
-                  <h3 className="inspector-section-title">Schema Fields</h3>
+                  <h3 className="inspector-section-title">Schema Definition</h3>
                   <div className="schema-list">
                     {Object.entries(selectedNodeInfo.details.schema).map(([field, type]) => (
                       <div className="schema-item" key={field}>
@@ -1193,25 +1383,11 @@ function App() {
                   </div>
                 </div>
               )}
-
-              {/* Node step-specific execution trigger */}
-              {selectedNodeInfo.type !== 'input' && (
-                <div className="node-action-box">
-                  <button 
-                    className="btn btn-action-secondary"
-                    onClick={() => handleRunSingleStep(selectedNodeInfo.id)}
-                    disabled={isSimulationActive || nodeStatuses[selectedNodeInfo.id] === 'running'}
-                  >
-                    <RefreshCw size={12} className={nodeStatuses[selectedNodeInfo.id] === 'running' ? 'animate-spin' : ''} />
-                    <span>Run Step Directly</span>
-                  </button>
-                </div>
-              )}
             </div>
           </aside>
         )}
 
-        {/* Collapsible Telemetry Drawer (Frosted) */}
+        {/* Telemetry Drawer */}
         <section className={`telemetry-drawer ${telemetryOpen ? 'open' : ''}`}>
           <div className="telemetry-header">
             <div className="telemetry-tabs">
@@ -1240,10 +1416,8 @@ function App() {
           </div>
 
           <div className="telemetry-content">
-            
-            {/* Terminal logs list */}
             {activeTab === 'logs' && (
-              <div className="terminal-console" id="log-terminal">
+              <div className="terminal-console">
                 {consoleLogs.map((log, idx) => (
                   <div className="terminal-line" key={idx}>
                     <span className="terminal-time">[{log.time}]</span>
@@ -1254,19 +1428,18 @@ function App() {
               </div>
             )}
 
-            {/* Remediation Loops list */}
             {activeTab === 'remediations' && (
               <div className="remediation-history-list">
                 {remediations.map((rem, idx) => (
                   <div className="rem-history-item" key={idx}>
                     <div className="rem-history-left">
-                      <span className="rem-history-title">{rem.fault} Auto-Remediation</span>
-                      <span className="rem-history-desc">Target Table: <code>{rem.target}</code> | Method: {rem.method}</span>
+                      <span className="rem-history-title">{rem.fault} Remediation</span>
+                      <span className="rem-history-desc">Target Dataset: <code>{rem.target}</code> | Method: {rem.method}</span>
                     </div>
                     <div className="rem-history-right">
                       <span className="rem-history-time">{rem.time}</span>
                       <div>
-                        <span className="rem-history-badge">PASSED ({rem.duration})</span>
+                        <span className="rem-history-badge">REMEDIATED ({rem.duration})</span>
                       </div>
                     </div>
                   </div>
@@ -1274,10 +1447,8 @@ function App() {
               </div>
             )}
 
-            {/* Pipeline telemetry metrics with gradient Area Chart */}
             {activeTab === 'stats' && (
               <div className="stats-grid">
-                
                 <div className="stat-item">
                   <div className="stat-info">
                     <h4>Success Rate</h4>
@@ -1288,41 +1459,21 @@ function App() {
 
                 <div className="stat-item">
                   <div className="stat-info">
-                    <h4>Quarantines</h4>
-                    <p className="stat-val">{incidents.filter(i => i.status === 'pending_approval').length}</p>
+                    <h4>Incidents Resolved</h4>
+                    <p className="stat-val">{remediations.length}</p>
                   </div>
-                  <div className="stat-icon" style={{ color: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)' }}><ShieldAlert size={16} /></div>
+                  <div className="stat-icon" style={{ color: 'var(--accent)' }}><ShieldCheck size={16} /></div>
                 </div>
 
                 <div className="stat-item">
                   <div className="stat-info">
-                    <h4>Analytic Storage</h4>
+                    <h4>Storage Size</h4>
                     <p className="stat-val">14.8 MB</p>
                   </div>
-                  <div className="stat-icon" style={{ color: '#0ea5e9', backgroundColor: 'rgba(14, 165, 233, 0.1)' }}><Database size={16} /></div>
+                  <div className="stat-icon" style={{ color: '#0ea5e9' }}><Database size={16} /></div>
                 </div>
-
-                {/* SVG Area chart */}
-                <div className="stat-item" style={{ padding: '8px 12px', justifyContent: 'flex-start', gap: '16px' }}>
-                  <div className="stat-info" style={{ minWidth: '100px' }}>
-                    <h4>Throughput</h4>
-                    <p className="stat-val" style={{ fontSize: '13px' }}>7-Day History</p>
-                    <div style={{ display: 'flex', gap: '8px', fontSize: '9px', color: '#94a3b8', marginTop: '6px' }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--accent)' }}></span> Orders
-                      </span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--info)' }}></span> Events
-                      </span>
-                    </div>
-                  </div>
-                  
-                  {renderStatsChart()}
-                </div>
-
               </div>
             )}
-
           </div>
         </section>
 
