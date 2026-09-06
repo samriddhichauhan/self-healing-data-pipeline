@@ -1,10 +1,12 @@
 {
   "python.defaultInterpreterPath": "C:/Users/samri/anaconda3/python.exe",
   "python.analysis.extraPaths": [
+    "${workspaceFolder}/apps/agent",
     "${workspaceFolder}/airflow/dags",
     "C:/Users/samri/anaconda3/Lib/site-packages"
   ],
   "python.autoComplete.extraPaths": [
+    "${workspaceFolder}/apps/agent",
     "${workspaceFolder}/airflow/dags",
     "C:/Users/samri/anaconda3/Lib/site-packages"
   ]

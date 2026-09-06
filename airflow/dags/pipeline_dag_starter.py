@@ -9,6 +9,11 @@ import os
 import sys
 import types
 
+# Ensure apps/agent is in sys.path for agent module resolution
+agent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../apps/agent"))
+if agent_dir not in sys.path:
+    sys.path.insert(0, agent_dir)
+
 # Ensure safe absolute SQLite connection string for Windows / local standalone execution
 conn_core = os.environ.get("AIRFLOW__CORE__SQL_ALCHEMY_CONN", "")
 conn_db = os.environ.get("AIRFLOW__DATABASE__SQL_ALCHEMY_CONN", "")
