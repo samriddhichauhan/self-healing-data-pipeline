@@ -101,3 +101,12 @@ class IncidentReport:
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in data.items() if k in valid_keys}
         return cls(**filtered)
+
+    def to_summary_markdown(self) -> str:
+        """Generates a concise Markdown summary badge for quick UI/CLI inspection."""
+        status_icon = "🟢" if self.status == "REMEDIATED" else ("🔴" if self.status == "ESCALATED" else "🟡")
+        return (
+            f"{status_icon} **{self.incident_id}** | Dataset: `{self.dataset}` | "
+            f"Action: `{self.action}` | Severity: `{self.severity}` | Confidence: `{self.confidence:.0%}`\n"
+            f"> *Hypothesis*: {self.hypothesis}\n"
+        )
