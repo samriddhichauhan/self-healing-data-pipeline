@@ -16,6 +16,7 @@ if base_dir not in sys.path:
     sys.path.append(base_dir)
 
 from agent.diagnosis.engine import DiagnosticEngine
+from agent.diagnosis.llm_adapter import LLMDiagnosticAdapter
 from agent.tools.incident_tool import IncidentTool
 from agent.tools.remediation_tool import RemediationTool
 from agent.tools.verification_tool import VerificationTool
@@ -36,7 +37,8 @@ REPORTS_DIR = os.path.join(DATA_DIR, "incidents", "reports")
 incident_tool = IncidentTool(reports_dir=REPORTS_DIR)
 remediation_tool = RemediationTool(data_dir=DATA_DIR)
 verification_tool = VerificationTool(data_dir=DATA_DIR)
-diagnostic_engine = DiagnosticEngine()
+diagnostic_engine = DiagnosticEngine(data_dir=DATA_DIR)
+llm_adapter = LLMDiagnosticAdapter(fallback_engine=diagnostic_engine)
 
 
 class FaultInjectRequest(BaseModel):
@@ -203,9 +205,9 @@ def inject_fault_endpoint(req: FaultInjectRequest):
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
 
-    # Diagnose and create incident
+    # Diagnose and create incident using safe LLM/hybrid diagnostic adapter
     inc_id = f"INC-{random_int()}"
-    report = diagnostic_engine.diagnose_fault(
+    report = llm_adapter.analyze_incident(
         incident_id=inc_id,
         pipeline_id="self_healing_pipeline",
         task_id="validate_quality" if req.fault_type != "schema_drift" else "validate_schema",
@@ -224,6 +226,61 @@ def inject_fault_endpoint(req: FaultInjectRequest):
         "incident_id": inc_id,
         "action": report.action,
         "report": report.to_dict(),
+    }
+
+
+class ScenarioRequest(BaseModel):
+    scenario_id: int  # 1: Healthy, 2: Schema Drift, 3: Null Spike, 4: Duplicate (Auto-Fix), 5: Volume Drop
+    execution_date: Optional[str] = "2026-06-01"
+
+
+@app.post("/api/v1/simulation/run-scenario")
+def run_manager_scenario(req: ScenarioRequest):
+    """
+    Executes a complete 5-scenario pipeline test run for live manager demonstrations.
+    """
+    fault_map = {
+        1: None,
+        2: "schema_drift",
+        3: "null_spike",
+        4: "duplicate_ingestion",
+        5: "volume_drop",
+    }
+    title_map = {
+        1: "Healthy Pipeline (Clean Baseline)",
+        2: "Schema Drift Fault (Corrupted Data Types)",
+        3: "Data Quality Fault (Null Spike in Customer ID)",
+        4: "Duplicate Ingestion Fault (Auto-Remediate)",
+        5: "Volume Drop Anomaly Fault (Missing Records)",
+    }
+
+    if req.scenario_id not in fault_map:
+        raise HTTPException(status_code=400, detail="Invalid scenario_id. Must be between 1 and 5.")
+
+    fault = fault_map[req.scenario_id]
+    title = title_map[req.scenario_id]
+
+    # Import test harness scenario runner
+    scripts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../scripts"))
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from test_pipeline_5_cases import run_pipeline_scenario, reset_environment
+
+    reset_environment(DATA_DIR)
+    os.environ["TEST_DATA_DIR"] = DATA_DIR
+
+    # Capture output safely
+    run_pipeline_scenario(req.scenario_id, title, fault_type=fault)
+
+    incidents = incident_tool.list_incidents()
+    latest_incident = incidents[0] if incidents else None
+
+    return {
+        "scenario_id": req.scenario_id,
+        "title": title,
+        "fault_type": fault or "NONE",
+        "status": "COMPLETED",
+        "latest_incident": latest_incident,
     }
 
 
