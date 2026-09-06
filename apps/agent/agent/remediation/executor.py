@@ -11,6 +11,25 @@ class RemediationExecutor:
     def __init__(self, data_dir: str = "./data"):
         self.data_dir = data_dir
 
+    def execute_remediation(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Executes remediation action based on plan contract.
+        """
+        rem_type = plan.get("remediation_type")
+        if rem_type == "deduplicate_dataset":
+            return self.deduplicate_dataset(
+                dataset=plan.get("dataset", "orders"),
+                primary_key=plan.get("primary_key", "order_id"),
+                execution_date=plan.get("execution_date", "2026-06-01")
+            )
+        elif rem_type == "quarantine_invalid_records":
+            return self.quarantine_invalid_records(
+                dataset=plan.get("dataset", "orders"),
+                condition_column=plan.get("condition_column", "customer_id"),
+                execution_date=plan.get("execution_date", "2026-06-01")
+            )
+        return {"status": "NOOP", "message": f"Unknown remediation type '{rem_type}'"}
+
     def deduplicate_dataset(self, dataset: str, primary_key: str, execution_date: str) -> Dict[str, Any]:
         """
         Idempotently deduplicates a staged dataset by primary key.

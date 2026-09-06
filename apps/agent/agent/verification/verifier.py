@@ -11,6 +11,13 @@ class RemediationVerifier:
     def __init__(self, data_dir: str = "./data"):
         self.data_dir = data_dir
 
+    def verify_remediation(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrapper method that extracts parameters from plan dict and delegates to verify()."""
+        dataset = plan.get("dataset", "orders")
+        primary_key = plan.get("primary_key", "order_id")
+        execution_date = plan.get("execution_date", "2026-06-01")
+        return self.verify(dataset=dataset, primary_key=primary_key, execution_date=execution_date)
+
     def verify(self, dataset: str, primary_key: str, execution_date: str) -> Dict[str, Any]:
         """
         Verifies post-remediation data health and compares metrics.
