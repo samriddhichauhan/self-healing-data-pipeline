@@ -1,62 +1,63 @@
-# Operations Runbook — Self-Healing Data Pipeline
+# Operations & Self-Healing Runbook — Data Engineering Platform
 
-This document guides engineers on running, monitoring, and troubleshooting the containerized Airflow pipeline.
-
----
-
-## 1. Environment Startup
-
-1. Confirm Docker Desktop is running.
-2. Initialize the metadata database (runs schema migrations and creates the default admin user):
-   ```bash
-   docker compose up airflow-init
-   ```
-3. Start the services in the background:
-   ```bash
-   docker compose up -d
-   ```
-4. Check running containers:
-   ```bash
-   docker compose ps
-   ```
+This operational runbook documents the architecture, diagnostic logic, Policy Gate rules, auto-remediation procedures, and troubleshooting workflows for the Self-Healing Data Pipeline.
 
 ---
 
-## 2. Ingesting & Running the Pipeline
+## 1. Environment & Architecture Overview
 
-- Access the Airflow UI at `http://localhost:8080` (credentials: `airflow` / `airflow`).
-- Locate the DAG `self_healing_pipeline` and toggle the **Active/Inactive** switch to enable it.
-- To trigger a manual run, click the **Trigger DAG** play button in the top right.
-
----
-
-## 3. Monitoring & Health Checks
-
-### Local Logs
-- Task run logs are mapped locally to `./airflow/logs/`.
-- Docker service logs can be viewed via:
-   ```bash
-   docker compose logs -f
-   ```
-
-### BigQuery Target State
-- Transactional tables are saved under dataset `pipeline_intern_<handle>`:
-  - `dim_customers` (Dimension)
-  - `dim_products` (Dimension)
-  - `fct_orders` (Fact, partitioned by day)
-  - `fct_events` (Fact, partitioned by day)
+* **Orchestration**: Apache Airflow DAG (`self_healing_pipeline`) with 5 TaskGroups (`ingestion`, `validation`, `transformation`, `load`, `monitoring`).
+* **API Backend**: FastAPI service running at `http://localhost:8000`.
+* **Frontend**: React + Vite pipeline dashboard running at `http://localhost:5173`.
+* **Agent System**: 5-stage diagnostic reasoning engine with safe optional LLM integration layer (`apps/agent/agent/diagnosis/llm_adapter.py`).
 
 ---
 
-## 4. Diagnostics & Remediation
+## 2. Policy Gate Decision Matrix
 
-When a task fails:
-1. **Agent Diagnostic Hook**: Airflow's `on_failure_callback` fires the AI Agent (`apps/agent`).
-2. **Incident Report**: The Agent creates a markdown incident report under `incidents/reports/inc_<incident_id>.md`.
-3. **Remediation States**:
-   - **Auto-Fixed**: Low-risk faults (Duplicate Ingestion, Volume Anomalies spike) are fixed automatically.
-   - **Escalated**: Structural or high-risk issues (Schema Drift, Null Spikes, Referential Breaks) await manual engineer confirmation. Check the dashboard or run:
-     ```bash
-     # To review open incident reports
-     cat incidents/reports/
-     ```
+| Fault Category | Severity | Policy Action | Rationale | Remediation Executed |
+| :--- | :---: | :---: | :--- | :--- |
+| **`DUPLICATE_INGESTION`** | `MEDIUM` | **`AUTO_FIX`** | Idempotent deduplication by primary key is safe and deterministic. | `RemediationExecutor.deduplicate_dataset` |
+| **`VOLUME_ANOMALY_SPIKE`**| `MEDIUM` | **`AUTO_FIX`** | Duplication spikes are resolved via primary key deduplication. | `RemediationExecutor.deduplicate_dataset` |
+| **`SCHEMA_DRIFT`** | `HIGH` | **`ESCALATE`** | Altered data types require schema migration and engineering review. | Human Escalation |
+| **`NULL_SPIKE`** | `HIGH` | **`ESCALATE`** | Non-nullable key nulls indicate upstream database extraction failure. | Human Escalation |
+| **`VOLUME_ANOMALY_DROP`** | `HIGH` | **`ESCALATE`** | Missing records suggest upstream job truncation or network loss. | Human Escalation |
+| **`REFERENTIAL_BREAK`** | `HIGH` | **`ESCALATE`** | Foreign key orphans require dimension synchronization. | Human Escalation |
+| **`STALENESS`** | `MEDIUM` | **`ESCALATE`** | Freshness SLA breach requires upstream cron inspection. | Human Escalation |
+
+---
+
+## 3. Diagnostic & Auto-Healing Sequence
+
+```
+1. Task Failure -> Airflow on_task_failure Callback
+2. Incident Serialization -> data/incidents/reports/inc_*.json
+3. AI Diagnostic Reasoning -> Hypothesis, Confidence, Blast Radius
+4. Policy Gate Safeguard -> AUTO_FIX or ESCALATE
+5. If AUTO_FIX -> RemediationExecutor -> Verification -> Pipeline Continued
+6. If ESCALATE -> Incident Marked PENDING_HUMAN_REVIEW -> Safe Stop
+```
+
+---
+
+## 4. Operational Commands & Diagnostic Verification
+
+### Execute Automated 5-Case Test Harness
+```bash
+python scripts/test_pipeline_5_cases.py
+```
+
+### Execute System Health Diagnostic
+```bash
+python scripts/check_airflow_health.py
+```
+
+### Verify DAG Lineage & Task Configuration
+```bash
+python scripts/verify_airflow_dag.py
+```
+
+### Run Full Test Suite
+```bash
+pytest
+```
