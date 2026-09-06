@@ -5,7 +5,7 @@ import os
 import json
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 
 
 @dataclass
@@ -26,8 +26,25 @@ class IncidentReport:
     status: str  # PENDING_APPROVAL, REMEDIATED, ESCALATED, DECLINED
     remediation: Optional[Dict[str, Any]] = None
     verification: Optional[Dict[str, Any]] = None
+    failed_check: Optional[str] = None
+    observed_value: Optional[Any] = None
+    expected_value: Optional[Any] = None
+    possible_root_causes: List[str] = field(default_factory=list)
+    remediation_status: str = "PENDING"
+    verification_status: str = "PENDING"
+    recovery_time: Optional[float] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def __post_init__(self):
+        if not self.failed_check:
+            self.failed_check = self.check
+        if self.observed_value is None:
+            self.observed_value = self.observed
+        if self.expected_value is None:
+            self.expected_value = self.expected
+        if not self.possible_root_causes and self.hypothesis:
+            self.possible_root_causes = [self.hypothesis]
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -46,14 +63,15 @@ class IncidentReport:
 * **Timestamp:** {self.timestamp}
 * **Pipeline:** {self.pipeline}
 * **Dataset:** {self.dataset}
-* **Check Name:** {self.check}
+* **Failed Check:** {self.failed_check or self.check}
 * **Severity:** {self.severity}
 * **Action Decision:** {self.action}
 * **Confidence Score:** {self.confidence:.2f}
+* **Recovery Duration:** {f"{self.recovery_time:.2f}s" if self.recovery_time else "N/A"}
 
 ## 1. Executive Summary & Observed Evidence
-* **Observed:** `{self.observed}`
-* **Expected:** `{self.expected}`
+* **Observed Value:** `{self.observed_value or self.observed}`
+* **Expected Value:** `{self.expected_value or self.expected}`
 * **Blast Radius:** {self.blast_radius}
 
 ### Diagnostic Evidence Details
@@ -61,13 +79,16 @@ class IncidentReport:
 {json.dumps(self.evidence, indent=2)}
 ```
 
-## 2. Agent Structured Reasoning
+## 2. Agent Structured Reasoning & Root Causes
 * **Hypothesis:** {self.hypothesis}
+* **Possible Root Causes:** {", ".join(self.possible_root_causes)}
 * **Proposed Action:** {self.action}
 
 ## 3. Remediation & Verification Record
+* **Remediation Status:** {self.remediation_status}
 * **Remediation Details:** {json.dumps(self.remediation) if self.remediation else 'None / Pending'}
-* **Verification Status:** {json.dumps(self.verification) if self.verification else 'None / Pending'}
+* **Verification Status:** {self.verification_status}
+* **Verification Details:** {json.dumps(self.verification) if self.verification else 'None / Pending'}
 """
         with open(md_path, "w") as f:
             f.write(md_content)
@@ -76,4 +97,7 @@ class IncidentReport:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "IncidentReport":
-        return cls(**data)
+        # Filter unknown keys safely for backward compatibility
+        valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered)

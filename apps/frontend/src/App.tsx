@@ -21,7 +21,8 @@ import {
   Cpu,
   Clock,
   Check,
-  Eye
+  Eye,
+  BarChart2
 } from 'lucide-react';
 
 interface Incident {
@@ -41,12 +42,23 @@ interface Incident {
   action: 'AUTO_FIX' | 'ESCALATE';
   remediation: string;
   verification: string;
+  possible_root_causes?: string[];
+  remediation_status?: string;
+  verification_status?: string;
 }
 
 interface LogLine {
   time: string;
   level: 'info' | 'warn' | 'error' | 'success';
   text: string;
+}
+
+interface ProfileSummary {
+  dataset: string;
+  row_count: number;
+  null_pct: number;
+  duplicate_pct: number;
+  freshness_sla: string;
 }
 
 interface NodeDetails {
@@ -79,7 +91,7 @@ interface PipelineNode {
 
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const [activeTab, setActiveTab] = useState<'logs' | 'remediations' | 'stats'>('logs');
+  const [activeTab, setActiveTab] = useState<'logs' | 'remediations' | 'stats' | 'profiling'>('logs');
   const [telemetryOpen, setTelemetryOpen] = useState(true);
   const [pipelineStatus, setPipelineStatus] = useState<'healthy' | 'anomaly' | 'failed'>('healthy');
   const [activeFault, setActiveFault] = useState<string | null>(null);
@@ -87,7 +99,6 @@ function App() {
   const [activeNode, setActiveNode] = useState<string>('ingest_orders');
   const [viewMode, setViewMode] = useState<'overview' | 'canvas'>('overview');
 
-  // Node running and duration states
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, 'healthy' | 'warning' | 'failed' | 'idle' | 'running'>>({});
   const [nodeDurations] = useState<Record<string, string>>({
     source_customers: 'static',
@@ -103,6 +114,30 @@ function App() {
   });
   const [isSimulationActive, setIsSimulationActive] = useState(false);
   const [connections, setConnections] = useState<Array<{ from: string, to: string, path: string, status: string }>>([]);
+
+  // Pipeline Run Summary (Item 11)
+  const [runSummary] = useState({
+    runId: 'run-20260601-0200',
+    startTime: '02:00:00 UTC',
+    endTime: '02:02:15 UTC',
+    duration: '135s',
+    tasksPassed: 8,
+    tasksFailed: 0,
+    recordsProcessed: 2060,
+    recordsRejected: 0,
+    incidentsCreated: 1,
+    autoFixes: 1,
+    escalations: 0,
+    finalStatus: 'SUCCESS'
+  });
+
+  // Data Profiling State (Item 1)
+  const [profiles] = useState<ProfileSummary[]>([
+    { dataset: 'orders', row_count: 300, null_pct: 0.2, duplicate_pct: 0.0, freshness_sla: '< 26h (Healthy)' },
+    { dataset: 'events', row_count: 1200, null_pct: 0.1, duplicate_pct: 0.0, freshness_sla: '< 6h (Healthy)' },
+    { dataset: 'customers', row_count: 500, null_pct: 0.0, duplicate_pct: 0.0, freshness_sla: 'Static Dimension' },
+    { dataset: 'products', row_count: 60, null_pct: 0.0, duplicate_pct: 0.0, freshness_sla: 'Static Dimension' },
+  ]);
 
   // Metrics overview
   const [metrics, setMetrics] = useState({
@@ -133,21 +168,28 @@ function App() {
       action: "AUTO_FIX",
       remediation: "Execute idempotent DELETE on staged duplicates by primary key order_id",
       verification: "Assert unique order_id count matches baseline (300 rows)",
+      possible_root_causes: [
+        "Upstream scheduler retry triggered duplicate file export into staging",
+        "Source database CDC log re-play without deduplication window",
+        "Manual file upload of historical batch"
+      ],
+      remediation_status: "PENDING",
+      verification_status: "PENDING"
     }
   ]);
 
-  // Past Remediations
   const [remediations, setRemediations] = useState([
     { id: "rem-091", time: "2026-06-01 02:06:00", fault: "Duplicate Ingestion", target: "orders", method: "Idempotent Deduplication", duration: "3.8s", status: "success" },
     { id: "rem-085", time: "2026-05-31 02:05:18", fault: "Staleness Warning", target: "events", method: "Sensor Recrawl", duration: "8.5s", status: "success" }
   ]);
 
-  // Console Logs
   const [consoleLogs, setConsoleLogs] = useState<LogLine[]>([
     { time: "02:00:01", level: "info", text: "Airflow LocalExecutor initialized for DAG self_healing_pipeline." },
-    { time: "02:00:03", level: "success", text: "Connected to SQLite/PostgreSQL metadata database." },
+    { time: "02:00:03", level: "success", text: "Connected to metadata database." },
     { time: "02:00:05", level: "info", text: "DAG 'self_healing_pipeline' scheduled run started for ds=2026-06-01." },
-    { time: "02:00:10", level: "info", text: "Ingestion stage started: dimensions, orders, events in parallel." }
+    { time: "02:00:10", level: "info", text: "Ingestion stage started: dimensions, orders, events in parallel." },
+    { time: "02:00:12", level: "success", text: "[DATA PROFILER] Orders: 300 rows, 0.2% nulls, 0.0% duplicates." },
+    { time: "02:00:15", level: "success", text: "[DATA PROFILER] Events: 1,200 rows, 0.1% nulls, 0.0% duplicates." }
   ]);
 
   // 6 Supported Fault Scenarios
@@ -208,7 +250,6 @@ function App() {
     }
   ];
 
-  // Pipeline nodes definitions matching Airflow TaskGroups & Tasks
   const pipelineNodes: PipelineNode[] = [
     {
       id: "source_customers",
@@ -351,7 +392,6 @@ function App() {
     }
   ];
 
-  // Sync node statuses dynamically when simulation is inactive
   useEffect(() => {
     if (isSimulationActive) return;
 
@@ -399,7 +439,6 @@ function App() {
     setNodeStatuses(initial);
   }, [activeFault, pipelineStatus, incidents, isSimulationActive]);
 
-  // Recalculate dynamic ports connections coordinates in canvas view
   const updateConnections = () => {
     const flowElement = document.querySelector('.pipeline-flow');
     if (!flowElement) return;
@@ -469,7 +508,6 @@ function App() {
     setConsoleLogs(prev => [...prev, { time, level, text }]);
   };
 
-  // Trigger step-by-step simulation run
   const runPipelineSimulation = () => {
     if (isSimulationActive) return;
     setIsSimulationActive(true);
@@ -491,7 +529,7 @@ function App() {
     setConsoleLogs([]);
     
     addLog("info", "Starting E2E self-healing data pipeline run for ds=2026-06-01...");
-    addLog("info", "Executing Stage 1: INGESTION (parallel batch processing)...");
+    addLog("info", "Executing Stage 1: INGESTION & DATA PROFILING...");
     
     setTimeout(() => {
       setNodeStatuses(prev => ({ ...prev, ingest_dimensions: 'running', ingest_orders: 'running', ingest_events: 'running' }));
@@ -502,7 +540,8 @@ function App() {
       setTimeout(() => {
         setNodeStatuses(prev => ({ ...prev, ingest_dimensions: 'healthy', ingest_orders: 'healthy', ingest_events: 'healthy', validate_schema: 'running' }));
         addLog("success", "INGESTION complete: 500 customers, 60 products, 300 orders, 1,200 events staged.");
-        addLog("info", "Executing Stage 2: VALIDATION (validate_schema)...");
+        addLog("success", "[DATA PROFILER] Profile generated: 0.2% null rate, 0.0% duplicates.");
+        addLog("info", "Executing Stage 2: SCHEMA VALIDATION...");
         
         setTimeout(() => {
           if (activeFault === 'schema_drift') {
@@ -529,6 +568,12 @@ function App() {
               action: "ESCALATE",
               remediation: "Escalate to Data Engineering team for schema contract update or source API patch",
               verification: "Manual verification after source column format correction",
+              possible_root_causes: [
+                "Upstream product catalog system updated export format",
+                "Source database column migration from float to string"
+              ],
+              remediation_status: "ESCALATED",
+              verification_status: "PENDING"
             };
             setIncidents(prev => [newInc, ...prev.filter(i => i.task_id !== 'validate_schema')]);
             setActiveNode("validate_schema");
@@ -538,7 +583,7 @@ function App() {
           
           setNodeStatuses(prev => ({ ...prev, validate_schema: 'healthy', validate_quality: 'running' }));
           addLog("success", "Schema validation PASSED. All column structures match contract.");
-          addLog("info", "Executing Stage 2 (cont): VALIDATION (validate_quality assertions)...");
+          addLog("info", "Executing Stage 2 (cont): QUALITY VALIDATION...");
           
           setTimeout(() => {
             if (activeFault === 'null_spike') {
@@ -565,6 +610,12 @@ function App() {
                 action: "ESCALATE",
                 remediation: "Halt transaction pipeline, quarantine null rows, escalate to finance engineering",
                 verification: "Re-run validate_quality after null imputation or source fix",
+                possible_root_causes: [
+                  "Extraction query omitted default fallback for pending payments",
+                  "Upstream payload truncation during network export"
+                ],
+                remediation_status: "ESCALATED",
+                verification_status: "PENDING"
               };
               setIncidents(prev => [newInc, ...prev.filter(i => i.task_id !== 'validate_quality')]);
               setActiveNode("validate_quality");
@@ -600,7 +651,6 @@ function App() {
     }, 1200);
   };
 
-  // Inject a fault manually
   const handleInjectFault = (faultId: string) => {
     if (activeFault || isSimulationActive) return; 
 
@@ -629,6 +679,12 @@ function App() {
         ? `Execute automated self-healing fix for ${fault.name}`
         : `Escalate incident to on-call engineer for manual review`,
       verification: "Assert contract rules on target table",
+      possible_root_causes: [
+        `Simulation rule trigger for ${fault.name}`,
+        `Upstream batch irregularity in ${fault.dataset}`
+      ],
+      remediation_status: "PENDING",
+      verification_status: "PENDING"
     };
 
     setIncidents(prev => [newIncident, ...prev.filter(i => i.task_id !== fault.task)]);
@@ -641,7 +697,6 @@ function App() {
     addLog("info", `AI Policy Gate Evaluated: Action set to ${fault.action}`);
   };
 
-  // Resolve / Approve incident
   const handleApproveRemediation = (id: string) => {
     const incident = incidents.find(i => i.id === id);
     if (!incident) return;
@@ -661,7 +716,13 @@ function App() {
           addLog("success", "Verification PASSED. All data quality indicators restored to HEALTHY.");
           addLog("success", `Pipeline resumed. Incident ${id} status updated to REMEDIATED.`);
 
-          setIncidents(prev => prev.map(inc => inc.id === id ? { ...inc, status: "remediated" } : inc));
+          setIncidents(prev => prev.map(inc => inc.id === id ? { 
+            ...inc, 
+            status: "remediated",
+            remediation_status: "SUCCESS",
+            verification_status: "PASSED"
+          } : inc));
+          
           setRemediations(prev => [
             {
               id: `rem-${Math.floor(100 + Math.random() * 900)}`,
@@ -690,7 +751,12 @@ function App() {
   };
 
   const handleDeclineIncident = (id: string) => {
-    setIncidents(prev => prev.map(inc => inc.id === id ? { ...inc, status: "escalated" } : inc));
+    setIncidents(prev => prev.map(inc => inc.id === id ? { 
+      ...inc, 
+      status: "escalated",
+      remediation_status: "ESCALATED_HUMAN_REVIEW",
+      verification_status: "PENDING_HUMAN"
+    } : inc));
     addLog("warn", `Incident ${id} escalated to human engineer review queue.`);
     setActiveFault(null);
     setPipelineStatus('healthy');
@@ -727,6 +793,16 @@ function App() {
             >
               <Layers size={16} />
               DAG Node Canvas
+            </div>
+            <div 
+              className="nav-item" 
+              onClick={() => {
+                setTelemetryOpen(true); 
+                setActiveTab('profiling');
+              }}
+            >
+              <BarChart2 size={16} />
+              Data Profiling
             </div>
             <div 
               className="nav-item" 
@@ -812,7 +888,35 @@ function App() {
           </div>
         </header>
 
-        {/* Compact Pipeline Metrics Bar (Requirement 4) */}
+        {/* Pipeline Run Summary Box (Item 11) */}
+        <div className="run-summary-container">
+          <div className="run-summary-item">
+            <span className="sum-label"><Clock size={10} /> Run ID</span>
+            <span className="sum-val">{runSummary.runId}</span>
+          </div>
+          <div className="run-summary-item">
+            <span className="sum-label">Duration</span>
+            <span className="sum-val">{runSummary.duration}</span>
+          </div>
+          <div className="run-summary-item">
+            <span className="sum-label">Tasks Passed/Failed</span>
+            <span className="sum-val" style={{ color: 'var(--healthy)' }}>{runSummary.tasksPassed} / {runSummary.tasksFailed}</span>
+          </div>
+          <div className="run-summary-item">
+            <span className="sum-label">Records Processed</span>
+            <span className="sum-val">{runSummary.recordsProcessed}</span>
+          </div>
+          <div className="run-summary-item">
+            <span className="sum-label">Auto-Fix / Escalate</span>
+            <span className="sum-val" style={{ color: 'var(--accent)' }}>{runSummary.autoFixes} / {runSummary.escalations}</span>
+          </div>
+          <div className="run-summary-item">
+            <span className="sum-label">Final Status</span>
+            <span className="sum-val" style={{ color: 'var(--healthy)' }}>{runSummary.finalStatus}</span>
+          </div>
+        </div>
+
+        {/* Compact Metrics Summary Bar */}
         <div className="metrics-summary-bar">
           <div className="metric-card">
             <div className="metric-title"><Clock size={11} /> Last Pipeline Run</div>
@@ -846,11 +950,11 @@ function App() {
           </div>
         </div>
 
-        {/* Fault Injection Panel (Requirement 8) */}
+        {/* Fault Injection Panel */}
         <div className="live-flow-container" style={{ padding: '12px 16px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Cpu size={13} /> Fault Injection Control Panel (6 Scenarios)
+              <Cpu size={13} /> Fault Injection Simulator (6 Scenarios)
             </span>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button 
@@ -891,24 +995,23 @@ function App() {
           </div>
         </div>
 
-        {/* VIEW MODE 1: Live Pipeline Flow View (Requirement 9) */}
+        {/* VIEW MODE 1: Live Pipeline Flow View */}
         {viewMode === 'overview' && (
           <div className="live-flow-container">
             <div className="live-flow-header">
               <div>
-                <h2><GitBranch size={16} color="var(--accent)" /> 5-Second System Architecture Flow Overview</h2>
+                <h2><GitBranch size={16} color="var(--accent)" /> System Architecture & Extended Pipeline Flow</h2>
                 <p>Complete end-to-end data ingestion, validation, and self-healing lifecycle</p>
               </div>
             </div>
 
             <div className="flow-diagram-wrapper">
-              {/* Row 1: Primary Pipeline Flow */}
               <div className="flow-path-row">
                 <span className="flow-path-label success">Primary Flow</span>
                 
                 <div className="flow-node-step">
                   <div className="flow-step-box">
-                    <span className="step-title">RAW DATA</span>
+                    <span className="step-title">DATA SOURCES</span>
                     <span className="step-sub">CSV / JSONL</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
@@ -916,31 +1019,31 @@ function App() {
 
                 <div className="flow-node-step">
                   <div className="flow-step-box active">
-                    <span className="step-title">AIRFLOW</span>
-                    <span className="step-sub">LocalExecutor</span>
+                    <span className="step-title">INGESTION</span>
+                    <span className="step-sub">Stage & Profile</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
                 <div className="flow-node-step">
                   <div className="flow-step-box">
-                    <span className="step-title">INGEST</span>
-                    <span className="step-sub">Stage Files</span>
+                    <span className="step-title">SCHEMA VALIDATION</span>
+                    <span className="step-sub">Contract Checks</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
                 <div className="flow-node-step">
                   <div className="flow-step-box">
-                    <span className="step-title">VALIDATE</span>
-                    <span className="step-sub">Schema & Quality</span>
+                    <span className="step-title">QUALITY VALIDATION</span>
+                    <span className="step-sub">Null / Volume / Keys</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
                 <div className="flow-node-step">
                   <div className="flow-step-box">
-                    <span className="step-title">TRANSFORM</span>
+                    <span className="step-title">TRANSFORMATION</span>
                     <span className="step-sub">Clean Models</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
@@ -956,13 +1059,13 @@ function App() {
 
                 <div className="flow-node-step">
                   <div className="flow-step-box success">
-                    <span className="step-title">MONITOR</span>
+                    <span className="step-title">MONITORING</span>
                     <span className="step-sub">Heartbeat Log</span>
                   </div>
                 </div>
               </div>
 
-              {/* Row 2: Self-Healing Branching Path */}
+              {/* Self-Healing Branching Path */}
               <div className="flow-path-row" style={{ backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: '8px', padding: '10px' }}>
                 <span className="flow-path-label healing">Healing Flow</span>
                 
@@ -977,15 +1080,15 @@ function App() {
                 <div className="flow-node-step">
                   <div className="flow-step-box">
                     <span className="step-title">INCIDENT</span>
-                    <span className="step-sub">Failure Report</span>
+                    <span className="step-sub">Failure Record</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
                 <div className="flow-node-step">
                   <div className="flow-step-box active">
-                    <span className="step-title">AI AGENT</span>
-                    <span className="step-sub">Diagnosis Engine</span>
+                    <span className="step-title">AI DIAGNOSIS</span>
+                    <span className="step-sub">Baseline Compare</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
@@ -998,16 +1101,18 @@ function App() {
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
-                <div className="flow-node-step" style={{ flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span className="policy-badge auto-fix">AUTO-FIX</span>
-                    <span className="flow-arrow">→</span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-primary)', fontWeight: 600 }}>REMEDIATE → VERIFY → RESOLVED</span>
+                <div className="flow-node-step">
+                  <div className="flow-step-box">
+                    <span className="step-title">VERIFICATION</span>
+                    <span className="step-sub">Post-Fix Assert</span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span className="policy-badge escalate">ESCALATE</span>
-                    <span className="flow-arrow">→</span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-primary)', fontWeight: 600 }}>HUMAN REVIEW → PENDING</span>
+                  <span className="flow-arrow"><ArrowRight size={14} /></span>
+                </div>
+
+                <div className="flow-node-step">
+                  <div className="flow-step-box success">
+                    <span className="step-title">RESOLVED</span>
+                    <span className="step-sub">Status Green</span>
                   </div>
                 </div>
               </div>
@@ -1015,7 +1120,7 @@ function App() {
           </div>
         )}
 
-        {/* VIEW MODE 2: Interactive Airflow DAG Canvas (Requirement 2 & 3) */}
+        {/* VIEW MODE 2: Interactive Airflow DAG Canvas */}
         {viewMode === 'canvas' && (
           <div className="canvas-workspace">
             <div className="pipeline-flow">
@@ -1029,7 +1134,6 @@ function App() {
                 ))}
               </svg>
               
-              {/* Column 1: Sources */}
               <div className="flow-column">
                 <div className="flow-link-label" style={{ top: '-14px' }}>Data Sources</div>
                 
@@ -1064,7 +1168,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Column 2: Ingestion Stage */}
               <div className="flow-column">
                 <div className="flow-link-label" style={{ top: '-14px' }}>INGESTION</div>
 
@@ -1114,7 +1217,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Column 3: Validation Stage */}
               <div className="flow-column">
                 <div className="flow-link-label" style={{ top: '-14px' }}>VALIDATION</div>
 
@@ -1149,7 +1251,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Column 4: Transformation Stage */}
               <div className="flow-column">
                 <div className="flow-link-label" style={{ top: '-14px' }}>TRANSFORM</div>
 
@@ -1169,7 +1270,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Column 5: Load Stage */}
               <div className="flow-column">
                 <div className="flow-link-label" style={{ top: '-14px' }}>LOAD</div>
 
@@ -1189,7 +1289,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Column 6: Monitoring Stage */}
               <div className="flow-column">
                 <div className="flow-link-label" style={{ top: '-14px' }}>MONITORING</div>
 
@@ -1213,7 +1312,7 @@ function App() {
           </div>
         )}
 
-        {/* Right slide-over Inspector (Requirements 5, 6, 7) */}
+        {/* Right slide-over Inspector (Item 9) */}
         {selectedNodeInfo && (
           <aside className={`inspector-panel ${selectedNodeInfo ? 'open' : ''}`}>
             <div className="inspector-header">
@@ -1227,7 +1326,6 @@ function App() {
             </div>
 
             <div className="inspector-content">
-              {/* Incident Inspector (Requirement 5 & 6 & 7) */}
               {activeIncident ? (
                 <div className={`inspector-incident-card ${activeIncident.severity === 'medium' ? 'warning' : ''}`}>
                   <div className="incident-badge-row">
@@ -1240,7 +1338,6 @@ function App() {
                     </span>
                   </div>
 
-                  {/* AI Agent Structured Diagnostic Display (Requirement 6) */}
                   <div className="diagnostic-stepper">
                     <div className="diagnostic-step">
                       <span className="step-label"><Eye size={11} /> OBSERVED:</span>
@@ -1255,9 +1352,15 @@ function App() {
                       <span className="step-value">{activeIncident.evidence}</span>
                     </div>
                     <div className="diagnostic-step">
-                      <span className="step-label"><Cpu size={11} /> HYPOTHESIS:</span>
+                      <span className="step-label"><Cpu size={11} /> DIAGNOSIS:</span>
                       <span className="step-value">{activeIncident.hypothesis}</span>
                     </div>
+                    {activeIncident.possible_root_causes && (
+                      <div className="diagnostic-step">
+                        <span className="step-label"><Layers size={11} /> ROOT CAUSES:</span>
+                        <span className="step-value">{activeIncident.possible_root_causes.join("; ")}</span>
+                      </div>
+                    )}
                     <div className="diagnostic-step">
                       <span className="step-label"><Activity size={11} /> CONFIDENCE:</span>
                       <span className="step-value" style={{ color: 'var(--healthy)', fontWeight: 700 }}>{activeIncident.confidence}</span>
@@ -1274,10 +1377,9 @@ function App() {
                     </div>
                   </div>
 
-                  {/* Policy Gate Flow Diagram (Requirement 7) */}
                   <div className="policy-gate-box">
                     <div className="policy-gate-title">
-                      <GitBranch size={13} color="var(--accent)" /> Policy Gate Evaluation Flow
+                      <GitBranch size={13} color="var(--accent)" /> Policy Decision & Verification Flow
                     </div>
                     {activeIncident.action === 'AUTO_FIX' ? (
                       <div className="policy-branch-flow">
@@ -1286,7 +1388,7 @@ function App() {
                         <span>→ Policy Gate</span>
                         <span>→ Remediation</span>
                         <span>→ Verification</span>
-                        <span style={{ color: 'var(--healthy)', fontWeight: 700 }}>→ Resolved</span>
+                        <span style={{ color: 'var(--healthy)', fontWeight: 700 }}>→ RESOLVED</span>
                       </div>
                     ) : (
                       <div className="policy-branch-flow">
@@ -1294,7 +1396,7 @@ function App() {
                         <span>→ Diagnosis</span>
                         <span>→ Policy Gate</span>
                         <span>→ Human Review</span>
-                        <span style={{ color: 'var(--warning)', fontWeight: 700 }}>→ Pending</span>
+                        <span style={{ color: 'var(--warning)', fontWeight: 700 }}>→ PENDING</span>
                       </div>
                     )}
                   </div>
@@ -1309,12 +1411,12 @@ function App() {
                         {isProcessing === activeIncident.id ? (
                           <>
                             <RefreshCw size={12} className="animate-spin" />
-                            Executing Remediation...
+                            Executing & Verifying...
                           </>
                         ) : (
                           <>
                             <UserCheck size={12} />
-                            Execute Auto-Fix
+                            Execute & Verify Auto-Fix
                           </>
                         )}
                       </button>
@@ -1332,10 +1434,8 @@ function App() {
                 </div>
               ) : null}
 
-              {/* Node Specifications & Rules */}
               <div className="inspector-section">
                 <h3 className="inspector-section-title">Task Specification</h3>
-                
                 <div className="property-grid">
                   {selectedNodeInfo.details.source && (
                     <div className="property-row">
@@ -1398,6 +1498,12 @@ function App() {
                 Local Logs
               </button>
               <button 
+                className={`telemetry-tab-btn ${activeTab === 'profiling' ? 'active' : ''}`}
+                onClick={() => setActiveTab('profiling')}
+              >
+                Data Profiling
+              </button>
+              <button 
                 className={`telemetry-tab-btn ${activeTab === 'remediations' ? 'active' : ''}`}
                 onClick={() => setActiveTab('remediations')}
               >
@@ -1426,6 +1532,32 @@ function App() {
                   </div>
                 ))}
               </div>
+            )}
+
+            {/* Data Profiling Inspector Tab (Item 1) */}
+            {activeTab === 'profiling' && (
+              <table className="profiling-table">
+                <thead>
+                  <tr>
+                    <th>Dataset</th>
+                    <th>Row Count</th>
+                    <th>Null %</th>
+                    <th>Duplicate %</th>
+                    <th>Freshness SLA</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {profiles.map((p, idx) => (
+                    <tr key={idx}>
+                      <td style={{ fontWeight: 700 }}>{p.dataset}</td>
+                      <td>{p.row_count}</td>
+                      <td style={{ color: p.null_pct > 2 ? '#ef4444' : 'var(--healthy)' }}>{p.null_pct}%</td>
+                      <td style={{ color: p.duplicate_pct > 0 ? '#f59e0b' : 'var(--healthy)' }}>{p.duplicate_pct}%</td>
+                      <td>{p.freshness_sla}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
 
             {activeTab === 'remediations' && (

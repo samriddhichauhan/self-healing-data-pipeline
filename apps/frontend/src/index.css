@@ -1432,3 +1432,68 @@ body {
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
+/* Pipeline Run Summary Box */
+.run-summary-container {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .run-summary-container {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.run-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.run-summary-item .sum-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.run-summary-item .sum-val {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Data Profiling Table */
+.profiling-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.profiling-table th {
+  text-align: left;
+  padding: 8px 10px;
+  background-color: rgba(0,0,0,0.2);
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 9px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.profiling-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-family: var(--mono);
+}
+
+

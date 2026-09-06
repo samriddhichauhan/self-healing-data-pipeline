@@ -271,6 +271,16 @@ def ingest_orders(**context):
     orders_df.to_csv(stg_path, index=False)
     print(f"Successfully staged orders to: {stg_path}")
 
+    # Non-blocking Data Profiling
+    try:
+        from agent.profiling.profiler import DataProfiler
+        profiler = DataProfiler(output_dir=os.path.join(data_dir, "incidents", "profiles"))
+        prof = profiler.profile_dataframe(orders_df, "orders", primary_key="order_id", date_column="order_timestamp")
+        profiler.save_profile(prof, execution_date)
+        print(f"[DATA PROFILER] Orders: {prof['row_count']} rows, {prof['null_percentage_overall']}% nulls, {prof['duplicate_percentage']}% duplicates.")
+    except Exception as pe:
+        print(f"[DATA PROFILER NOTICE] Profiling skipped: {pe}")
+
 
 def ingest_events(**context):
     """Verifies events batch exists, reads JSONL and stages to local staging folder."""
@@ -291,6 +301,16 @@ def ingest_events(**context):
     os.makedirs(os.path.dirname(stg_path), exist_ok=True)
     events_df.to_json(stg_path, orient="records", lines=True)
     print(f"Successfully staged events to: {stg_path}")
+
+    # Non-blocking Data Profiling
+    try:
+        from agent.profiling.profiler import DataProfiler
+        profiler = DataProfiler(output_dir=os.path.join(data_dir, "incidents", "profiles"))
+        prof = profiler.profile_dataframe(events_df, "events", primary_key="event_id", date_column="event_timestamp")
+        profiler.save_profile(prof, execution_date)
+        print(f"[DATA PROFILER] Events: {prof['row_count']} rows, {prof['null_percentage_overall']}% nulls, {prof['duplicate_percentage']}% duplicates.")
+    except Exception as pe:
+        print(f"[DATA PROFILER NOTICE] Profiling skipped: {pe}")
 
 
 def check_dataframe_schema(df, expected_schema, dataset_name):
