@@ -5,6 +5,7 @@ airflow/config/gcp-service-account.json
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Python caches and virtualenvs
 __pycache__/
