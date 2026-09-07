@@ -196,6 +196,34 @@ def on_task_failure(context):
         "error_message": str(exception)
     }
 
+    # Invoke AI Diagnostic reasoning engine (Ollama Local AI -> Gemini -> Rule-Based Fallback)
+    try:
+        from agent.diagnosis.llm_adapter import LLMDiagnosticAdapter
+        from agent.tools.logger import get_logger
+        
+        exec_logger = get_logger("pipeline_execution", "pipeline_execution.log")
+        exec_logger.error(f"Task failure detected in task '{task_id}'. Failure category: {failure_category}. Incident ID: {incident_id}")
+
+        adapter = LLMDiagnosticAdapter()
+        diag_report = adapter.analyze_incident(
+            incident_id=incident_id,
+            pipeline_id=dag_id,
+            task_id=task_id,
+            dataset="orders" if "orders" in str(exception).lower() else "products",
+            fault_category=failure_category,
+            observed=str(exception),
+            expected="Healthy validation bounds",
+            evidence=incident_data,
+            execution_date=execution_date or "2026-06-01"
+        )
+
+        data_dir = get_data_dir()
+        report_dir = os.path.join(data_dir, "incidents", "reports")
+        diag_report.save(report_dir)
+        exec_logger.info(f"AI Diagnosis completed for {incident_id}: Action={diag_report.action}, Mode={diag_report.evidence.get('ai_mode')}")
+    except Exception as ai_err:
+        print(f"[AI DIAGNOSIS HOOK NOTICE] {ai_err}")
+
     # Write report
     report_dir = "/opt/airflow/incidents/reports"
     if not os.path.exists(report_dir):

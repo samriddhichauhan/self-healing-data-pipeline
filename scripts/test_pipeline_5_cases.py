@@ -36,7 +36,7 @@ from apps.agent.agent.policies.policy_gate import PolicyGate
 from apps.agent.agent.remediation.executor import RemediationExecutor
 from apps.agent.agent.verification.verifier import RemediationVerifier
 
-import airflow.dags.pipeline_dag_starter as dag_module
+import pipeline_dag_starter as dag_module
 
 
 def reset_environment(data_dir):
@@ -201,8 +201,19 @@ def run_pipeline_scenario(scenario_num, title, fault_type=None):
 
 def handle_failure(task_id, fault_type, err_msg, context):
     print("\n[AI DIAGNOSTIC & HEALING AGENT INVOCATION]")
+    from apps.agent.agent.diagnosis.llm_adapter import LLMDiagnosticAdapter
+    from apps.agent.agent.tools.logger import get_logger, log_ai_event
+
+    exec_logger = get_logger("pipeline_execution", "pipeline_execution.log")
+    task_logger = get_logger(task_id, f"{task_id}.log")
+
+    task_logger.error(f"Task '{task_id}' failed during scenario run. Fault type: {fault_type}. Error: {err_msg}")
+    exec_logger.error(f"Incident triggered in task '{task_id}'. Error: {err_msg}")
+
     gate = PolicyGate()
     engine = DiagnosticEngine(policy_gate=gate)
+    adapter = LLMDiagnosticAdapter(fallback_engine=engine)
+
     executor = RemediationExecutor(data_dir=dag_module.get_data_dir())
     verifier = RemediationVerifier(data_dir=dag_module.get_data_dir())
 
@@ -217,7 +228,7 @@ def handle_failure(task_id, fault_type, err_msg, context):
     }
     fault_cat = category_map.get(fault_type, "UNKNOWN")
 
-    report = engine.diagnose_fault(
+    report = adapter.analyze_incident(
         incident_id=f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}",
         pipeline_id="self_healing_pipeline",
         task_id=task_id,
@@ -225,13 +236,23 @@ def handle_failure(task_id, fault_type, err_msg, context):
         fault_category=fault_cat,
         observed=err_msg,
         expected="Valid schema and quality bounds",
-        evidence={"error": err_msg},
+        evidence={"error": err_msg, "fault_type": fault_type},
         execution_date=context["ds"]
     )
 
-    print(f"   [DIAGNOSIS] Hypothesis: {report.hypothesis}")
+    ai_mode = report.evidence.get("ai_mode", "Rule-Based Engine")
+    print(f"   [AI DIAGNOSIS ({ai_mode})] Hypothesis: {report.hypothesis}")
     print(f"   [SEVERITY] {report.severity}")
     print(f"   [POLICY GATE ACTION] {report.action}")
+
+    log_ai_event("DIAGNOSIS_SUMMARY", {
+        "incident_id": report.incident_id,
+        "ai_mode": ai_mode,
+        "task_id": task_id,
+        "action": report.action,
+        "hypothesis": report.hypothesis,
+        "confidence": report.confidence
+    })
 
     if report.action == "AUTO_FIX":
         print(f"   [REMEDIATION] Executing Automated Remediation plan...")
@@ -243,9 +264,15 @@ def handle_failure(task_id, fault_type, err_msg, context):
         }
         res = executor.execute_remediation(plan)
         print(f"   [REMEDIATION STATUS] {res['status']} — Removed {res.get('removed_duplicates', 0)} duplicates (Clean count: {res.get('cleaned_rows')})")
+        
+        rem_logger = get_logger("remediation_executor", "remediation_executor.log")
+        rem_logger.info(f"Remediation executed for {report.incident_id}: Removed {res.get('removed_duplicates', 0)} duplicates.")
 
         v_res = verifier.verify_remediation(plan)
         print(f"   [VERIFICATION STATUS] {v_res['status']} (Verified clean row count: {v_res.get('remaining_rows')})")
+
+        ver_logger = get_logger("verification", "verification.log")
+        ver_logger.info(f"Verification completed for {report.incident_id}: Status={v_res['status']}, Clean count={v_res.get('remaining_rows')}")
         return True
     else:
         print(f"   [ESCALATED] Action ESCALATED to Data Engineering team. (Human review required - execution safe-stopped)")

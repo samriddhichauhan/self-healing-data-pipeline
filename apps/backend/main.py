@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import glob
+from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -281,6 +282,52 @@ def run_manager_scenario(req: ScenarioRequest):
         "fault_type": fault or "NONE",
         "status": "COMPLETED",
         "latest_incident": latest_incident,
+    }
+
+
+@app.get("/api/v1/logs")
+def list_system_logs():
+    """
+    Lists all log files stored in the central logs/ directory.
+    """
+    logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../logs"))
+    if not os.path.exists(logs_dir):
+        return []
+
+    log_files = []
+    for f in os.listdir(logs_dir):
+        fp = os.path.join(logs_dir, f)
+        if os.path.isfile(fp) and f.endswith(".log"):
+            stat = os.stat(fp)
+            log_files.append({
+                "filename": f,
+                "size_bytes": stat.st_size,
+                "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat()
+            })
+
+    return sorted(log_files, key=lambda x: x["modified_time"], reverse=True)
+
+
+@app.get("/api/v1/logs/{filename}")
+def get_log_content(filename: str):
+    """
+    Returns content of a specific log file from logs/ directory.
+    """
+    logs_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../logs"))
+    safe_name = os.path.basename(filename)
+    filepath = os.path.join(logs_dir, safe_name)
+
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail=f"Log file '{safe_name}' not found.")
+
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    return {
+        "filename": safe_name,
+        "lines": content.splitlines(),
+        "total_lines": len(content.splitlines()),
+        "raw": content
     }
 
 
