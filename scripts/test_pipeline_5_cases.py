@@ -22,6 +22,7 @@ from datetime import datetime
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 agent_dir = os.path.join(project_root, "apps", "agent")
 fault_inj_dir = os.path.join(project_root, "scripts", "fault-injection")
+dags_dir = os.path.join(project_root, "airflow", "dags")
 
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -29,6 +30,8 @@ if agent_dir not in sys.path:
     sys.path.insert(0, agent_dir)
 if fault_inj_dir not in sys.path:
     sys.path.insert(0, fault_inj_dir)
+if dags_dir not in sys.path:
+    sys.path.insert(0, dags_dir)
 
 from inject_fault import inject_fault
 from apps.agent.agent.diagnosis.engine import DiagnosticEngine
