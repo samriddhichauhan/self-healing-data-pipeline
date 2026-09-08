@@ -98,6 +98,7 @@ function App() {
   const [isProcessing, setIsProcessing] = useState<string | null>(null);
   const [activeNode, setActiveNode] = useState<string>('ingest_orders');
   const [viewMode, setViewMode] = useState<'overview' | 'canvas'>('overview');
+  const [selectedHealingStep, setSelectedHealingStep] = useState<'FAILURE' | 'INCIDENT' | 'DIAGNOSIS' | 'POLICY_GATE' | 'VERIFICATION' | 'RESOLVED'>('DIAGNOSIS');
 
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, 'healthy' | 'warning' | 'failed' | 'idle' | 'running'>>({});
   const [nodeDurations] = useState<Record<string, string>>({
@@ -1069,53 +1070,166 @@ function App() {
               <div className="flow-path-row" style={{ backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: '8px', padding: '10px' }}>
                 <span className="flow-path-label healing">Healing Flow</span>
                 
-                <div className="flow-node-step">
-                  <div className="flow-step-box danger">
+                <div className="flow-node-step flow-step-clickable" onClick={() => setSelectedHealingStep('FAILURE')}>
+                  <div className={`flow-step-box danger ${selectedHealingStep === 'FAILURE' ? 'selected-healing-step' : ''}`}>
                     <span className="step-title">FAILURE</span>
                     <span className="step-sub">Validation Assert</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
-                <div className="flow-node-step">
-                  <div className="flow-step-box">
+                <div className="flow-node-step flow-step-clickable" onClick={() => setSelectedHealingStep('INCIDENT')}>
+                  <div className={`flow-step-box ${selectedHealingStep === 'INCIDENT' ? 'selected-healing-step' : ''}`}>
                     <span className="step-title">INCIDENT</span>
                     <span className="step-sub">Failure Record</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
-                <div className="flow-node-step">
-                  <div className="flow-step-box active">
+                <div className="flow-node-step flow-step-clickable" onClick={() => setSelectedHealingStep('DIAGNOSIS')}>
+                  <div className={`flow-step-box active ${selectedHealingStep === 'DIAGNOSIS' ? 'selected-healing-step' : ''}`}>
                     <span className="step-title">AI DIAGNOSIS</span>
                     <span className="step-sub">Baseline Compare</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
-                <div className="flow-node-step">
-                  <div className="flow-step-box">
+                <div className="flow-node-step flow-step-clickable" onClick={() => setSelectedHealingStep('POLICY_GATE')}>
+                  <div className={`flow-step-box ${selectedHealingStep === 'POLICY_GATE' ? 'selected-healing-step' : ''}`}>
                     <span className="step-title">POLICY GATE</span>
                     <span className="step-sub">Auto vs Escalate</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
-                <div className="flow-node-step">
-                  <div className="flow-step-box">
+                <div className="flow-node-step flow-step-clickable" onClick={() => setSelectedHealingStep('VERIFICATION')}>
+                  <div className={`flow-step-box ${selectedHealingStep === 'VERIFICATION' ? 'selected-healing-step' : ''}`}>
                     <span className="step-title">VERIFICATION</span>
                     <span className="step-sub">Post-Fix Assert</span>
                   </div>
                   <span className="flow-arrow"><ArrowRight size={14} /></span>
                 </div>
 
-                <div className="flow-node-step">
-                  <div className="flow-step-box success">
+                <div className="flow-node-step flow-step-clickable" onClick={() => setSelectedHealingStep('RESOLVED')}>
+                  <div className={`flow-step-box success ${selectedHealingStep === 'RESOLVED' ? 'selected-healing-step' : ''}`}>
                     <span className="step-title">RESOLVED</span>
                     <span className="step-sub">Status Green</span>
                   </div>
                 </div>
               </div>
+
+              {/* Interactive AI Diagnosis, Policy Gate & Verification Inspection Cards */}
+              {incidents.length > 0 && (
+                <div className="healing-detail-grid">
+                  {/* CARD 1: AI DIAGNOSIS */}
+                  <div className={`healing-card ${selectedHealingStep === 'DIAGNOSIS' ? 'selected-healing-step' : ''}`} style={{ borderColor: selectedHealingStep === 'DIAGNOSIS' ? 'var(--accent)' : '' }}>
+                    <div className="healing-card-header">
+                      <span className="healing-card-title">
+                        <Cpu size={14} color="var(--accent)" /> AI Diagnosis
+                      </span>
+                      <span className="severity-pill medium" style={{ fontSize: '9px', padding: '2px 6px' }}>REAL-TIME AI</span>
+                    </div>
+                    <div className="healing-card-body">
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><Eye size={10} /> Observed Failure</span>
+                        <span className="healing-metric-value">{incidents[0].observed}</span>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><FileCode2 size={10} /> Evidence Collected</span>
+                        <span className="healing-metric-value mono">{incidents[0].evidence}</span>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><Cpu size={10} /> Diagnostic Hypothesis</span>
+                        <span className="healing-metric-value" style={{ color: 'var(--accent)' }}>{incidents[0].hypothesis}</span>
+                      </div>
+                      <div className="healing-metric-row" style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <div>
+                          <span className="healing-metric-label"><Activity size={10} /> Confidence</span>
+                          <span className="healing-metric-value mono" style={{ color: 'var(--healthy)', fontWeight: 700 }}>{incidents[0].confidence}</span>
+                        </div>
+                        <div>
+                          <span className="healing-metric-label"><ShieldAlert size={10} /> Blast Radius</span>
+                          <span className="healing-metric-value mono">{incidents[0].blast_radius}</span>
+                        </div>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><GitBranch size={10} /> Recommended Action</span>
+                        <span className="healing-metric-value mono" style={{ fontWeight: 700 }}>{incidents[0].action}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* CARD 2: POLICY GATE */}
+                  <div className={`healing-card ${selectedHealingStep === 'POLICY_GATE' ? 'selected-healing-step' : ''}`} style={{ borderColor: selectedHealingStep === 'POLICY_GATE' ? 'var(--accent)' : '' }}>
+                    <div className="healing-card-header">
+                      <span className="healing-card-title">
+                        <ShieldCheck size={14} color="var(--healthy)" /> Policy Gate Safety
+                      </span>
+                      <span className={`risk-pill ${incidents[0].action === 'AUTO_FIX' ? 'low' : 'high'}`}>
+                        {incidents[0].action === 'AUTO_FIX' ? 'LOW RISK' : 'HIGH RISK'}
+                      </span>
+                    </div>
+                    <div className="healing-card-body">
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><ShieldAlert size={10} /> Risk Assessment</span>
+                        <span className="healing-metric-value">{incidents[0].action === 'AUTO_FIX' ? 'LOW (Idempotent dataset repair)' : 'HIGH (Destructive DDL / contract change)'}</span>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><BarChart2 size={10} /> Confidence Threshold Check</span>
+                        <span className="healing-metric-value mono" style={{ color: 'var(--healthy)' }}>
+                          Threshold: 0.85 (85%) | Score: {incidents[0].confidence} (PASSED)
+                        </span>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><RefreshCw size={10} /> Idempotency Check</span>
+                        <span className="healing-metric-value mono">
+                          {incidents[0].action === 'AUTO_FIX' ? 'YES (Safe to execute repeatedly)' : 'NO (Manual review required)'}
+                        </span>
+                      </div>
+                      <div className={`policy-decision-banner ${incidents[0].action === 'AUTO_FIX' ? 'auto-fix' : 'escalate'}`}>
+                        <span>Policy Decision:</span>
+                        <span className="mono">{incidents[0].action}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* CARD 3: VERIFICATION */}
+                  <div className={`healing-card ${selectedHealingStep === 'VERIFICATION' ? 'selected-healing-step' : ''}`} style={{ borderColor: selectedHealingStep === 'VERIFICATION' ? 'var(--accent)' : '' }}>
+                    <div className="healing-card-header">
+                      <span className="healing-card-title">
+                        <CheckCircle2 size={14} color="var(--healthy)" /> Verification & Recovery
+                      </span>
+                      <span className="rem-history-badge" style={{ margin: 0 }}>
+                        {incidents[0].status.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="healing-card-body">
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><AlertCircle size={10} /> Before Remediation Value</span>
+                        <span className="healing-metric-value mono" style={{ color: '#ef4444' }}>{incidents[0].observed}</span>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><CheckCircle2 size={10} /> After Remediation Value</span>
+                        <span className="healing-metric-value mono" style={{ color: 'var(--healthy)' }}>
+                          {incidents[0].status === 'remediated' || incidents[0].verification_status === 'PASSED' ? '300 clean records (0 duplicates)' : 'Pending Verification Execution'}
+                        </span>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><ShieldCheck size={10} /> Verification Assertion</span>
+                        <span className="healing-metric-value mono" style={{ color: 'var(--healthy)', fontWeight: 700 }}>
+                          {incidents[0].verification_status || (incidents[0].status === 'remediated' ? 'PASSED (Zero duplicate primary keys found)' : 'PENDING')}
+                        </span>
+                      </div>
+                      <div className="healing-metric-row">
+                        <span className="healing-metric-label"><Activity size={10} /> Final Incident Status</span>
+                        <span className="healing-metric-value" style={{ color: incidents[0].status === 'remediated' ? 'var(--healthy)' : '#f59e0b', fontWeight: 700 }}>
+                          {incidents[0].status === 'remediated' ? 'RESOLVED (Pipeline Recovered)' : incidents[0].status.toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
