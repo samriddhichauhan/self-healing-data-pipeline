@@ -26,9 +26,14 @@ x-airflow-common:
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
     # Point this at your GCP service-account key (see gcp-setup/GCP_SETUP.md)
     GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/config/gcp-service-account.json
+    PYTHONPATH: /opt/airflow/apps/agent
+    OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+    OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:latest}
     _PIP_ADDITIONAL_REQUIREMENTS: >-
       apache-airflow-providers-google
       pandas
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
@@ -36,6 +41,7 @@ x-airflow-common:
     - ./airflow/config:/opt/airflow/config
     - ./data:/opt/airflow/data
     - ./incidents:/opt/airflow/incidents
+    - ./apps/agent:/opt/airflow/apps/agent
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
