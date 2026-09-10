@@ -148,7 +148,7 @@ def test_policy_gate_confidence_threshold_enforcement(policy_gate):
 
 def test_ollama_adapter_fallback():
     """Tests Ollama diagnostic adapter fallback when local Ollama server is offline."""
-    adapter = OllamaDiagnosticAdapter()
+    adapter = OllamaDiagnosticAdapter(host="http://localhost:99999")
     report = adapter.analyze_incident(
         incident_id="INC-OLLAMA-TEST",
         pipeline_id="self_healing_pipeline",
@@ -164,7 +164,7 @@ def test_ollama_adapter_fallback():
     assert report.incident_id == "INC-OLLAMA-TEST"
     assert report.action == "AUTO_FIX"
     assert "ai_mode" in report.evidence
-    # System operates without crash whether Ollama is active or falling back
+    assert "RULE_BASED_ENGINE" in report.evidence["ai_mode"]
 
 
 def test_error_handling_malformed_evidence(diagnostic_engine):

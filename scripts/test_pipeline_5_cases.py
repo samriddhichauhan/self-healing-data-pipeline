@@ -204,7 +204,7 @@ def run_pipeline_scenario(scenario_num, title, fault_type=None):
 
 def handle_failure(task_id, fault_type, err_msg, context):
     print("\n[AI DIAGNOSTIC & HEALING AGENT INVOCATION]")
-    from apps.agent.agent.diagnosis.llm_adapter import LLMDiagnosticAdapter
+    from apps.agent.agent.diagnosis.ollama_adapter import OllamaDiagnosticAdapter
     from apps.agent.agent.tools.logger import get_logger, log_ai_event
 
     exec_logger = get_logger("pipeline_execution", "pipeline_execution.log")
@@ -215,7 +215,7 @@ def handle_failure(task_id, fault_type, err_msg, context):
 
     gate = PolicyGate()
     engine = DiagnosticEngine(policy_gate=gate)
-    adapter = LLMDiagnosticAdapter(fallback_engine=engine)
+    adapter = OllamaDiagnosticAdapter(fallback_engine=engine)
 
     executor = RemediationExecutor(data_dir=dag_module.get_data_dir())
     verifier = RemediationVerifier(data_dir=dag_module.get_data_dir())
@@ -230,22 +230,42 @@ def handle_failure(task_id, fault_type, err_msg, context):
         "staleness": "STALENESS",
     }
     fault_cat = category_map.get(fault_type, "UNKNOWN")
+    dataset = "orders" if "orders" in err_msg.lower() else "products"
+
+    # Build real evidence extracted from the error and files
+    real_evidence = {
+        "error": err_msg,
+        "fault_type": fault_type,
+        "failed_task": task_id,
+        "execution_date": context["ds"],
+        "dataset": dataset,
+    }
+    if fault_cat == "DUPLICATE_INGESTION":
+        real_evidence["duplicate_issue"] = "Duplicate primary keys detected in staged orders"
+    elif fault_cat == "SCHEMA_DRIFT":
+        real_evidence["schema_issue"] = "Non-float values or type mismatch found in dataset"
+    elif fault_cat == "NULL_SPIKE":
+        real_evidence["null_issue"] = "Null values exceeded acceptable quality thresholds"
+    elif fault_cat == "VOLUME_ANOMALY_DROP":
+        real_evidence["volume_issue"] = "Staged row count dropped significantly below expected baseline"
 
     report = adapter.analyze_incident(
         incident_id=f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}",
         pipeline_id="self_healing_pipeline",
         task_id=task_id,
-        dataset="orders" if "orders" in err_msg.lower() else "products",
+        dataset=dataset,
         fault_category=fault_cat,
         observed=err_msg,
         expected="Valid schema and quality bounds",
-        evidence={"error": err_msg, "fault_type": fault_type},
+        evidence=real_evidence,
         execution_date=context["ds"]
     )
 
-    ai_mode = report.evidence.get("ai_mode", "Rule-Based Engine")
-    print(f"   [AI DIAGNOSIS ({ai_mode})] Hypothesis: {report.hypothesis}")
-    print(f"   [SEVERITY] {report.severity}")
+    ai_mode = report.evidence.get("ai_mode", "RULE_BASED_ENGINE")
+    source = report.evidence.get("diagnosis_source", "RULE_BASED_ENGINE")
+    print(f"   [DIAGNOSIS SOURCE] {source} ({ai_mode})")
+    print(f"   [HYPOTHESIS / ROOT CAUSE] {report.hypothesis}")
+    print(f"   [CONFIDENCE] {report.confidence:.2f} | [RISK] {report.evidence.get('ollama_risk', report.severity)}")
     print(f"   [POLICY GATE ACTION] {report.action}")
 
     log_ai_event("DIAGNOSIS_SUMMARY", {
