@@ -146,8 +146,15 @@ def get_data_dir():
 
 def on_task_failure(context):
     """
-    Hook called whenever any task in this DAG fails. This is where the
-    agent should be invoked to diagnose + (auto-fix or escalate).
+    Hook called whenever any task in this DAG fails.
+
+    Full self-healing flow:
+      1. Detect failure and classify fault category from exception message
+      2. Collect structured failure evidence
+      3. Call OllamaDiagnosticAdapter (PRIMARY: Ollama AI → FALLBACK: rule-based)
+      4. Save IncidentReport (JSON + Markdown)
+      5. If Policy Gate → AUTO_FIX: execute RemediationExecutor → verify with RemediationVerifier
+      6. If Policy Gate → ESCALATE: log for human review
     """
     task_instance = context.get("task_instance")
     dag_run = context.get("dag_run")
@@ -168,24 +175,35 @@ def on_task_failure(context):
     print(f"Try: {try_number}")
     print(f"Exception: {exception}")
 
-    # Determine failure category from exception message
+    # ── Step 1: Classify failure from exception message ────────────────────────
     failure_category = "UNKNOWN"
     err_msg = str(exception).upper()
-    if "SCHEMA DRIFT" in err_msg:
+    if "SCHEMA DRIFT" in err_msg or "SCHEMA_DRIFT" in err_msg:
         failure_category = "SCHEMA_DRIFT"
-    elif "ROW COUNT" in err_msg or "ABNORMAL VOLUME" in err_msg:
+    elif "ABNORMAL VOLUME" in err_msg or "ROW COUNT" in err_msg:
         failure_category = "VOLUME_ANOMALY"
-    elif "NULL" in err_msg:
+    elif "NULL" in err_msg and "VIOLATION" in err_msg:
         failure_category = "NULL_SPIKE"
-    elif "DUPLICATE" in err_msg:
+    elif "DUPLICATE" in err_msg and ("PRIMARY KEY" in err_msg or "DUPLICATE_INGESTION" in err_msg):
         failure_category = "DUPLICATE_INGESTION"
     elif "REFERENTIAL" in err_msg or "FOREIGN KEY" in err_msg:
         failure_category = "REFERENTIAL_BREAK"
     elif "FRESHNESS" in err_msg or "SLA" in err_msg:
         failure_category = "STALENESS"
 
-    # Serialize incident details to a file for the diagnostics agent to consume
-    incident_data = {
+    # Determine dataset from context
+    err_lower = str(exception).lower()
+    if "orders" in err_lower:
+        dataset = "orders"
+    elif "events" in err_lower:
+        dataset = "events"
+    elif "products" in err_lower or "schema" in err_lower:
+        dataset = "products"
+    else:
+        dataset = "orders"
+
+    # ── Step 2: Build structured evidence ─────────────────────────────────────
+    evidence = {
         "incident_id": incident_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "dag_id": dag_id,
@@ -193,72 +211,112 @@ def on_task_failure(context):
         "execution_date": execution_date,
         "try_number": try_number,
         "failure_category": failure_category,
-        "error_message": str(exception)
+        "error_message": str(exception),
+        "dataset": dataset,
     }
 
-    # Invoke AI Diagnostic reasoning engine (Ollama Local AI -> Gemini -> Rule-Based Fallback)
+    # ── Step 3: AI Diagnosis (Ollama PRIMARY → rule-based FALLBACK) ───────────
+    diag_report = None
     try:
-        from agent.diagnosis.llm_adapter import LLMDiagnosticAdapter
+        from agent.diagnosis.ollama_adapter import OllamaDiagnosticAdapter
         from agent.tools.logger import get_logger
-        
-        exec_logger = get_logger("pipeline_execution", "pipeline_execution.log")
-        exec_logger.error(f"Task failure detected in task '{task_id}'. Failure category: {failure_category}. Incident ID: {incident_id}")
 
-        adapter = LLMDiagnosticAdapter()
+        exec_logger = get_logger("pipeline_execution", "pipeline_execution.log")
+        exec_logger.error(
+            f"Task failure detected in task '{task_id}'. "
+            f"Failure category: {failure_category}. Incident ID: {incident_id}"
+        )
+
+        # OllamaDiagnosticAdapter: Ollama = primary, DiagnosticEngine = fallback
+        adapter = OllamaDiagnosticAdapter()
         diag_report = adapter.analyze_incident(
             incident_id=incident_id,
             pipeline_id=dag_id,
             task_id=task_id,
-            dataset="orders" if "orders" in str(exception).lower() else "products",
+            dataset=dataset,
             fault_category=failure_category,
             observed=str(exception),
-            expected="Healthy validation bounds",
-            evidence=incident_data,
-            execution_date=execution_date or "2026-06-01"
+            expected="Healthy validation bounds with clean data",
+            evidence=evidence,
+            execution_date=execution_date or "2026-06-01",
         )
 
-        data_dir = get_data_dir()
-        report_dir = os.path.join(data_dir, "incidents", "reports")
-        diag_report.save(report_dir)
-        exec_logger.info(f"AI Diagnosis completed for {incident_id}: Action={diag_report.action}, Mode={diag_report.evidence.get('ai_mode')}")
+        ai_mode = diag_report.evidence.get("ai_mode", "UNKNOWN")
+        exec_logger.info(
+            f"Diagnosis completed for {incident_id}: "
+            f"Action={diag_report.action}, "
+            f"Confidence={diag_report.confidence:.2f}, "
+            f"Mode={ai_mode}"
+        )
+        print(
+            f"[DIAGNOSIS] {incident_id}: action={diag_report.action} "
+            f"confidence={diag_report.confidence:.2f} mode={ai_mode}"
+        )
+
     except Exception as ai_err:
-        print(f"[AI DIAGNOSIS HOOK NOTICE] {ai_err}")
+        print(f"[AI DIAGNOSIS HOOK ERROR] {ai_err}")
+        diag_report = None
 
-    # Write report
-    report_dir = "/opt/airflow/incidents/reports"
-    if not os.path.exists(report_dir):
-        # Fallback to local host directory mapped or data folder
-        data_dir = get_data_dir()
-        report_dir = os.path.join(data_dir, "incidents", "reports")
-        
+    # ── Step 4: Save IncidentReport ────────────────────────────────────────────
+    data_dir = get_data_dir()
+    report_dir = os.path.join(data_dir, "incidents", "reports")
     os.makedirs(report_dir, exist_ok=True)
-    report_path = os.path.join(report_dir, f"inc_{incident_id}.json")
-    
-    with open(report_path, "w") as f:
-        json.dump(incident_data, f, indent=2)
-        
-    # Write human-readable markdown report as well
-    md_report_path = os.path.join(report_dir, f"inc_{incident_id}.md")
-    with open(md_report_path, "w") as f:
-        f.write(f"""# Incident Report: {incident_id}
 
-## Status: ESCALATED_PENDING_APPROVAL
-* **Detection Time:** {incident_data['timestamp']}
-* **Source DAG:** {dag_id}
-* **Source Task:** {task_id}
-* **Affected Execution Date:** {execution_date}
-* **Try Number:** {try_number}
-* **Failure Category:** {failure_category}
+    if diag_report is not None:
+        try:
+            diag_report.save(report_dir)
+            print(f"[INCIDENT SAVED] {report_dir}/inc_{incident_id}.json")
+        except Exception as save_err:
+            print(f"[INCIDENT SAVE ERROR] {save_err}")
 
-## 1. Executive Summary
-Task `{task_id}` failed validation checks during execution on {execution_date}. Clean data pipeline execution was aborted to prevent downstream corruption.
+        # ── Step 5: Auto-remediation when Policy Gate authorizes ──────────────
+        if diag_report.action == "AUTO_FIX" and failure_category == "DUPLICATE_INGESTION":
+            try:
+                from agent.remediation.executor import RemediationExecutor
+                from agent.verification.verifier import RemediationVerifier
 
-## 2. Technical Details
-```
-{exception}
-```
-""")
-    print(f"Written incident reports to {report_path} and {md_report_path}")
+                executor = RemediationExecutor(data_dir=data_dir)
+                fix_res = executor.deduplicate_dataset(
+                    dataset=dataset,
+                    primary_key="order_id" if dataset == "orders" else "event_id",
+                    execution_date=execution_date or "2026-06-01",
+                )
+                print(f"[AUTO-REMEDIATION] {fix_res}")
+
+                verifier = RemediationVerifier(data_dir=data_dir)
+                verify_res = verifier.verify(
+                    dataset=dataset,
+                    primary_key="order_id" if dataset == "orders" else "event_id",
+                    execution_date=execution_date or "2026-06-01",
+                )
+                print(f"[VERIFICATION] {verify_res}")
+
+                diag_report.remediation_status = "SUCCESS" if fix_res.get("status") == "SUCCESS" else "FAILED"
+                diag_report.verification_status = "PASSED" if verify_res.get("verified") else "FAILED"
+                diag_report.status = "REMEDIATED" if verify_res.get("verified") else "ESCALATED"
+                diag_report.remediation = fix_res
+                diag_report.verification = verify_res
+                diag_report.save(report_dir)
+                print(
+                    f"[SELF-HEALING COMPLETE] {incident_id}: "
+                    f"remediation={diag_report.remediation_status} "
+                    f"verification={diag_report.verification_status} "
+                    f"status={diag_report.status}"
+                )
+            except Exception as rem_err:
+                print(f"[REMEDIATION ERROR] {rem_err}")
+
+        elif diag_report.action == "ESCALATE":
+            print(
+                f"[ESCALATED] {incident_id}: Policy Gate requires human review. "
+                f"Category={failure_category} Confidence={diag_report.confidence:.2f}"
+            )
+    else:
+        # Minimal fallback write if AI hook completely failed
+        fallback_path = os.path.join(report_dir, f"inc_{incident_id}.json")
+        with open(fallback_path, "w") as f:
+            json.dump(evidence, f, indent=2)
+        print(f"[INCIDENT SAVED (MINIMAL)] {fallback_path}")
 
 
 def ingest_dimensions():
