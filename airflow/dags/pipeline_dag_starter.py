@@ -346,21 +346,24 @@ def ingest_orders(**context):
     """Verifies orders batch exists, reads CSV and stages to local staging folder."""
     execution_date = context["ds"]
     data_dir = get_data_dir()
-    
-    raw_pattern = config["datasets"]["orders"]["path_pattern"]
-    raw_path = os.path.join(data_dir, "raw", raw_pattern.format(date=execution_date))
-    
-    if not os.path.exists(raw_path):
-        raise FileNotFoundError(f"Orders daily batch file not found: {raw_path}")
-        
-    print(f"Reading orders data from: {raw_path}")
-    orders_df = pd.read_csv(raw_path)
-    
-    # Write to local staging path
+
     stg_path = os.path.join(data_dir, "staging", f"stg_orders_{execution_date}.csv")
     os.makedirs(os.path.dirname(stg_path), exist_ok=True)
-    orders_df.to_csv(stg_path, index=False)
-    print(f"Successfully staged orders to: {stg_path}")
+
+    if os.path.exists(stg_path):
+        print(f"Staged orders file already exists. Preserving existing staging: {stg_path}")
+        orders_df = pd.read_csv(stg_path)
+    else:
+        raw_pattern = config["datasets"]["orders"]["path_pattern"]
+        raw_path = os.path.join(data_dir, "raw", raw_pattern.format(date=execution_date))
+
+        if not os.path.exists(raw_path):
+            raise FileNotFoundError(f"Orders daily batch file not found: {raw_path}")
+
+        print(f"Reading orders data from: {raw_path}")
+        orders_df = pd.read_csv(raw_path)
+        orders_df.to_csv(stg_path, index=False)
+        print(f"Successfully staged orders to: {stg_path}")
 
     # Non-blocking Data Profiling
     try:
@@ -371,6 +374,7 @@ def ingest_orders(**context):
         print(f"[DATA PROFILER] Orders: {prof['row_count']} rows, {prof['null_percentage_overall']}% nulls, {prof['duplicate_percentage']}% duplicates.")
     except Exception as pe:
         print(f"[DATA PROFILER NOTICE] Profiling skipped: {pe}")
+
 
 
 def ingest_events(**context):
