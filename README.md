@@ -56,9 +56,9 @@ A containerized, resilient production data engineering platform featuring automa
 ├── apps/
 │   ├── frontend/                # React + Vite pipeline monitoring dashboard
 │   ├── backend/                 # FastAPI REST server & scenario endpoints
-│   └── agent/                   # AI Diagnostic Engine, Policy Gate, Remediation, Verification
+│   └── agent/                   # AI Diagnostic Engine (Ollama llama3.2), Policy Gate, Remediation, Verification
 ├── airflow/
-│   ├── dags/                    # pipeline_dag_starter.py (5 TaskGroups, 8 Tasks)
+│   ├── dags/                    # pipeline_dag_starter.py (5 TaskGroups, 8 Tasks, AI on_failure callback)
 │   ├── config/                  # pipeline_config.yaml (schema contracts & SLAs)
 │   └── plugins/                 # Custom Airflow hooks and operators
 ├── data/                        # Persistent analytical storage (raw, staging, processed, incidents)
@@ -70,6 +70,15 @@ A containerized, resilient production data engineering platform featuring automa
 │   └── verify_airflow_dag.py    # DAG verification script
 └── tests/                       # Automated unit & integration tests (36 passing tests)
 ```
+
+---
+
+## 🤖 AI Self-Healing Engine (Ollama llama3.2 Integration)
+
+* **Primary Reasoning Engine**: `OllamaDiagnosticAdapter` running locally (`llama3.2:latest`) via host gateway connectivity.
+* **Deterministic Fallback**: `DiagnosticEngine` seamlessly engages if the local model is offline or timing out.
+* **Policy Gate Authorization**: Every AI action passes through strict policy evaluation (`AUTO_FIX` for duplicate ingestion, `ESCALATE` for schema drifts and null spikes).
+* **Closed-Loop Verification**: Post-remediation verification checks ensure clean state before continuing or marking incidents resolved.
 
 ---
 
