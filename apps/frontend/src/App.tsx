@@ -45,6 +45,8 @@ interface Incident {
   possible_root_causes?: string[];
   remediation_status?: string;
   verification_status?: string;
+  ai_mode?: string;
+  diagnosis_source?: string;
 }
 
 interface LogLine {
@@ -439,6 +441,51 @@ function App() {
     };
     setNodeStatuses(initial);
   }, [activeFault, pipelineStatus, incidents, isSimulationActive]);
+
+  // Sync real incident reports from FastAPI backend if available
+  useEffect(() => {
+    const fetchLiveIncidents = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/v1/incidents');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const mapped: Incident[] = data.map((item: any) => ({
+            id: item.incident_id || item.id || `INC-${Date.now()}`,
+            timestamp: item.timestamp || new Date().toISOString().substring(0, 19),
+            task_id: item.task_id || item.failed_check || item.check || 'validate_quality',
+            dataset: item.dataset || 'orders',
+            fault_category: (item.fault_category || item.category || 'UNKNOWN').toUpperCase(),
+            severity: (item.severity || 'medium').toLowerCase() as 'high' | 'medium',
+            status: (item.status || 'pending_approval').toLowerCase() as any,
+            observed: item.observed || item.observed_value || 'Pipeline failure detected',
+            expected: item.expected || item.expected_value || 'Expected healthy contract',
+            evidence: typeof item.evidence === 'object' ? JSON.stringify(item.evidence) : String(item.evidence || ''),
+            hypothesis: item.hypothesis || 'AI Failure Diagnosis pending',
+            confidence: item.confidence ? `${Math.round(item.confidence * 100)}%` : '92%',
+            blast_radius: item.blast_radius || 'Staged datasets impacted',
+            action: item.action || 'ESCALATE',
+            remediation: typeof item.remediation === 'object' ? (item.remediation?.rationale || 'Remediation plan') : String(item.remediation || ''),
+            verification: typeof item.verification === 'object' ? JSON.stringify(item.verification) : String(item.verification || 'Pending verification'),
+            possible_root_causes: item.possible_root_causes || [],
+            remediation_status: item.remediation_status || 'PENDING',
+            verification_status: item.verification_status || 'PENDING',
+            ai_mode: item.evidence?.ai_mode,
+            diagnosis_source: item.evidence?.diagnosis_source || (item.evidence?.ai_mode?.includes('OLLAMA') ? 'OLLAMA' : undefined),
+          }));
+          setIncidents(mapped);
+          setMetrics(prev => ({
+            ...prev,
+            activeIncidents: mapped.filter(i => i.status === 'pending_approval').length,
+            remediatedIncidents: mapped.filter(i => i.status === 'remediated').length
+          }));
+        }
+      } catch (err) {
+        // Backend not running locally or CORS; keep local state intact
+      }
+    };
+    fetchLiveIncidents();
+  }, []);
 
   const updateConnections = () => {
     const flowElement = document.querySelector('.pipeline-flow');
@@ -1127,7 +1174,9 @@ function App() {
                       <span className="healing-card-title">
                         <Cpu size={14} color="var(--accent)" /> AI Diagnosis
                       </span>
-                      <span className="severity-pill medium" style={{ fontSize: '9px', padding: '2px 6px' }}>REAL-TIME AI</span>
+                      <span className={`severity-pill ${incidents[0].diagnosis_source === 'OLLAMA' || incidents[0].ai_mode?.includes('OLLAMA') ? 'medium' : 'low'}`} style={{ fontSize: '9px', padding: '2px 6px', fontWeight: 700 }}>
+                        {incidents[0].diagnosis_source || (incidents[0].ai_mode?.includes('OLLAMA') ? 'OLLAMA (llama3.2)' : 'RULE_BASED_ENGINE')}
+                      </span>
                     </div>
                     <div className="healing-card-body">
                       <div className="healing-metric-row">
