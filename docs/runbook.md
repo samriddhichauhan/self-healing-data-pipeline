@@ -9,7 +9,8 @@ This operational runbook documents the architecture, diagnostic logic, Policy Ga
 * **Orchestration**: Apache Airflow DAG (`self_healing_pipeline`) with 5 TaskGroups (`ingestion`, `validation`, `transformation`, `load`, `monitoring`).
 * **API Backend**: FastAPI service running at `http://localhost:8000`.
 * **Frontend**: React + Vite pipeline dashboard running at `http://localhost:5173`.
-* **Agent System**: 5-stage diagnostic reasoning engine with safe optional LLM integration layer (`apps/agent/agent/diagnosis/llm_adapter.py`).
+* **Agent System**: 5-stage diagnostic reasoning engine with local Ollama LLM primary adapter (`apps/agent/agent/diagnosis/ollama_adapter.py`) and deterministic rule-based fallback (`apps/agent/agent/diagnosis/engine.py`).
+* **AI Runtime Connectivity**: Airflow containers connect to host Ollama instance via `http://host.docker.internal:11434` with model `llama3.2:latest`.
 
 ---
 
