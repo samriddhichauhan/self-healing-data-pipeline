@@ -172,7 +172,7 @@ Configured in `.env`:
 
 ## 13. System Boundaries & Overclaiming Protections
 
-1. **BigQuery Cloud Execution:** BigQuery schema adapters and partitioning logic are fully implemented (`apps/agent/agent/adapters/bigquery_adapter.py`). Live cloud execution requires GCP service account credentials. Current environment runs in **Local Sandbox Mode**.
+1. **BigQuery Cloud Execution:** BigQuery schema adapters and partitioning logic are fully implemented (`apps/agent/agent/tools/bq_tool.py`). Live cloud execution requires GCP service account credentials. Current environment runs in **Local Sandbox Mode**.
 2. **AI Layer:** System uses a **Hybrid Diagnostic Engine**. If Ollama or Gemini keys are missing, the system gracefully falls back to deterministic rule-based pattern matching.
 
 ---

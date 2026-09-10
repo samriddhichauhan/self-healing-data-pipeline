@@ -68,7 +68,7 @@ A containerized, resilient production data engineering platform featuring automa
 │   ├── test_pipeline_5_cases.py # 5-case pipeline scenario test harness
 │   ├── check_airflow_health.py  # Health diagnostic script
 │   └── verify_airflow_dag.py    # DAG verification script
-└── tests/                       # Automated unit & integration tests (27 passing tests)
+└── tests/                       # Automated unit & integration tests (36 passing tests)
 ```
 
 ---
