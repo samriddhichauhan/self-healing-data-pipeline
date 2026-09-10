@@ -131,6 +131,11 @@ class DiagnosticEngine:
         if baseline:
             evidence["historical_healthy_baseline"] = baseline
 
+        if "diagnosis_source" not in evidence:
+            evidence["diagnosis_source"] = "RULE_BASED_ENGINE"
+        if "ai_mode" not in evidence:
+            evidence["ai_mode"] = "RULE_BASED_ENGINE"
+
         # Evaluate decision via Policy Gate
         action, rationale = self.policy_gate.evaluate(category, confidence, evidence)
 
