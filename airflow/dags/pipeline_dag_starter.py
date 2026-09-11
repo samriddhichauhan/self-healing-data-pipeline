@@ -516,8 +516,97 @@ def validate_quality(**context):
     if df_orders is not None:
         pk = config["datasets"]["orders"]["primary_key"]
         if df_orders[pk].duplicated().any():
-            dup_count = df_orders[pk].duplicated().sum()
-            raise ValueError(f"Data Quality: Duplicate primary keys found in orders. Found {dup_count} duplicates for column '{pk}'")
+            dup_count = int(df_orders[pk].duplicated().sum())
+            exc_msg = f"Data Quality: Duplicate primary keys found in orders. Found {dup_count} duplicates for column '{pk}'"
+            
+            # Trigger self-healing workflow for DUPLICATE_INGESTION
+            auto_healed = False
+            try:
+                from agent.diagnosis.ollama_adapter import OllamaDiagnosticAdapter
+                from agent.policies.policy_gate import PolicyGate
+                from agent.remediation.executor import RemediationExecutor
+                from agent.verification.verifier import RemediationVerifier
+
+                task_instance = context.get("task_instance")
+                dag_run = context.get("dag_run")
+                task_id = task_instance.task_id if task_instance else "validate_quality"
+                dag_id = dag_run.dag_id if dag_run else "self_healing_pipeline"
+                try_number = task_instance.try_number if task_instance else 1
+                incident_id = f"INC-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
+
+                evidence = {
+                    "incident_id": incident_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "dag_id": dag_id,
+                    "task_id": task_id,
+                    "execution_date": execution_date,
+                    "try_number": try_number,
+                    "failure_category": "DUPLICATE_INGESTION",
+                    "error_message": exc_msg,
+                    "dataset": "orders",
+                    "duplicate_count": dup_count,
+                }
+
+                adapter = OllamaDiagnosticAdapter()
+                diag_report = adapter.analyze_incident(
+                    incident_id=incident_id,
+                    pipeline_id=dag_id,
+                    task_id=task_id,
+                    dataset="orders",
+                    fault_category="DUPLICATE_INGESTION",
+                    observed=f"{len(df_orders)} rows ({dup_count} duplicate primary keys)",
+                    expected="300 rows (0 duplicates)",
+                    evidence=evidence,
+                    execution_date=execution_date,
+                )
+
+                gate = PolicyGate(confidence_threshold=0.85)
+                gate_action, gate_rationale = gate.evaluate(
+                    fault_category="DUPLICATE_INGESTION",
+                    confidence=diag_report.confidence,
+                    evidence=evidence,
+                )
+
+                report_dir = os.path.join(data_dir, "incidents", "reports")
+                os.makedirs(report_dir, exist_ok=True)
+
+                if gate_action == "AUTO_FIX":
+                    executor = RemediationExecutor(data_dir=data_dir)
+                    fix_res = executor.deduplicate_dataset(
+                        dataset="orders",
+                        primary_key=pk,
+                        execution_date=execution_date,
+                    )
+
+                    verifier = RemediationVerifier(data_dir=data_dir)
+                    verify_res = verifier.verify(
+                        dataset="orders",
+                        primary_key=pk,
+                        execution_date=execution_date,
+                    )
+
+                    diag_report.remediation_status = "SUCCESS" if fix_res.get("status") == "SUCCESS" else "FAILED"
+                    diag_report.verification_status = "PASSED" if verify_res.get("verified") else "FAILED"
+                    diag_report.status = "REMEDIATED" if verify_res.get("verified") else "ESCALATED"
+                    diag_report.remediation = fix_res
+                    diag_report.verification = verify_res
+                    diag_report.save(report_dir)
+
+                    if verify_res.get("verified"):
+                        # Re-load repaired staged orders and re-validate
+                        if os.path.exists(orders_stg):
+                            df_orders = pd.read_csv(orders_stg)
+                        if not df_orders[pk].duplicated().any():
+                            auto_healed = True
+                            print(f"[SELF-HEALING SUCCESS] DUPLICATE_INGESTION auto-fixed and verified. Re-validation passed ({len(df_orders)} rows, 0 duplicates). Continuing downstream.")
+                else:
+                    diag_report.status = "ESCALATED"
+                    diag_report.save(report_dir)
+            except Exception as heal_err:
+                print(f"[SELF-HEALING ERROR] {heal_err}")
+
+            if not auto_healed:
+                raise ValueError(exc_msg)
             
     if df_events is not None:
         pk = config["datasets"]["events"]["primary_key"]
