@@ -1,11 +1,24 @@
-# GCP Service Account Keys (Credentials)
-*gcp-service-account*.json
-airflow/config/gcp-service-account.json
-
 # Environment files
 .env
 .env.*
 !.env.example
+
+# Credentials, keys and cloud service-account files
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+credentials*.json
+service-account*.json
+service_account*.json
+*-sa-key*.json
+gcp-key*.json
+.gcloud/
+secrets/
+*.secret
 
 # Python caches and virtualenvs
 __pycache__/
@@ -28,6 +41,13 @@ airflow/postgres-db-volume/
 .idea/
 .ipynb_checkpoints/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
 
 # Node.js / Frontend
 node_modules/
@@ -41,23 +61,21 @@ out/
 *.egg-info/
 .eggs/
 
-# Temp files
+# Logs and temp files
+logs/
 *.log
+*_logs.txt
 *.tmp
 *.temp
 *~
 .DS_Store
 Thumbs.db
 
-# Pipeline Data Imports & Staging
-data/*.csv
-data/orders/
-data/events/
-data/raw/
+# Pipeline runtime state (data/raw/ is the tracked canonical fixture and is
+# deliberately NOT ignored here; it's also deterministically regenerable via
+# scripts/reset_demo.py if missing)
 data/processed/
 data/staging/
 data/incidents/
-incidents/reports/
-incidents/status/
-
+data/quarantine/
 

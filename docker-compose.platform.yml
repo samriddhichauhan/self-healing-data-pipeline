@@ -1,0 +1,44 @@
+# SelfHeal AI — frontend platform for the existing self-healing pipeline.
+#
+# A separate compose project: it does not modify or restart any service in
+# docker-compose.yml. It joins the existing `internship1_default` network so
+# it can reach the existing backend and Airflow webserver by service name.
+#
+#   docker compose -f docker-compose.platform.yml up -d --build
+#   open http://localhost:5174   (SelfHeal AI)
+#   open http://localhost:8001/docs   (platform API)
+#
+# Requires the main stack to be running first (docker compose up -d).
+name: selfheal-ai
+
+services:
+  platform-api:
+    build: ./apps/platform-api
+    environment:
+      BACKEND_URL: http://backend:8000
+      AIRFLOW_BASE_URL: http://airflow-webserver:8080
+      AIRFLOW_PUBLIC_URL: http://localhost:8080
+      AIRFLOW_USER: airflow
+      AIRFLOW_PASSWORD: airflow
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:latest}
+      DAG_ID: self_healing_pipeline
+      CORS_ORIGINS: http://localhost:5174,http://127.0.0.1:5174,http://localhost:5175,http://127.0.0.1:5175
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+
+  selfheal-ai:
+    build: ./apps/selfheal-ai
+    ports:
+      - "5174:80"
+    depends_on:
+      - platform-api
+    restart: unless-stopped
+
+networks:
+  default:
+    name: internship1_default
+    external: true

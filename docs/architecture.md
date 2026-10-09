@@ -1,82 +1,55 @@
-# System Architecture — Self-Healing Data Pipeline
+# Architecture
 
-This document details the high-level architecture, component responsibilities, data profiling, incident lifecycle, policy gate, and implementation topology of the Self-Healing Data Pipeline project.
+## Stack
 
----
+- **Airflow 2.9.3** (LocalExecutor) — orchestrates the `self_healing_pipeline` DAG, runs only inside Docker.
+- **PostgreSQL 15** — one container, two databases: `airflow` (Airflow's own metadata) and `pipeline` (this project's business data — `pipeline_runs`, `quality_results`, `incidents`, `orders`, `events`, `aggregated_metrics`).
+- **FastAPI backend** (`apps/backend`) — reads the `pipeline` database and incident/log files, exposes REST endpoints, can trigger DAG runs via the Airflow REST API.
+- **React + Vite frontend** (`apps/frontend`) — polls the backend; no client-side simulation.
+- **Ollama** (optional, local, host-side) — primary AI diagnosis engine. If unreachable, a deterministic rule-based engine takes over automatically. No external paid API is used anywhere.
 
-## 1. System Topology
-
-The diagram below outlines the flow of data, control, profiling, and diagnostics across the system:
-
-```mermaid
-graph TD
-    subgraph Client Layer
-        FE["Frontend (React / Vite Dashboard)"]
-    end
-
-    subgraph Service Layer
-        BE["Backend API (FastAPI)"]
-    end
-
-    subgraph Ingestion & Profiling Layer
-        AF["Apache Airflow (LocalExecutor)"]
-        Raw["Raw Data (CSV/JSONL)"]
-        Prof["Data Profiler (Nulls / Dups / Bounds)"]
-        Target["Local Staging & Storage"]
-    end
-
-    subgraph Diagnostics & Healing Layer
-        Agent["AI Diagnostic Reasoning Engine"]
-        Policy["Policy Gate (Auto-Fix vs Escalate)"]
-        Remediation["Remediation Executor"]
-        Verification["Remediation Verifier"]
-    end
-
-    %% Data flow
-    Raw -->|1. Ingest & Profile| AF
-    AF -->|2. Non-blocking Profile| Prof
-    AF -->|3. Validate & Load| Target
-
-    %% Control / Diagnostics flow
-    AF -->|4. On Task Failure Hook| Agent
-    Agent -->|5. Baseline Compare & Reason| Policy
-    Policy -->|6. AUTO_FIX| Remediation
-    Policy -->|6. ESCALATE| FE
-    Remediation -->|7. Post-Fix Verification| Verification
-    Verification -->|8. Mark RESOLVED| AF
-    
-    %% Management API flow
-    FE <-->|User Interaction| BE
-    BE <-->|Read Metrics / Profiles / Runs| AF
-    BE <-->|Read Incidents / Trigger Auto-Fix| Agent
-```
-
----
-
-## 2. Component Directory
-
-| Component | Responsibility | Status |
-| :--- | :--- | :--- |
-| **Frontend** | Interactive React/Vite dashboard displaying Live Pipeline Flow, DAG Node Canvas, Telemetry Metrics, Data Profiling, and Incident Inspector. | **COMPLETE** |
-| **Backend API** | FastAPI service exposing REST endpoints for pipeline status, summary runs, incident listings, profiling reports, fault injection, and remediation calls. | **COMPLETE** |
-| **Airflow Orchestrator** | Coordinates 5 TaskGroups (`ingestion`, `validation`, `transformation`, `load`, `monitoring`) and 8 tasks with detailed `doc_md` documentation and failure callbacks. | **COMPLETE** |
-| **Data Profiler** | Non-blocking data health calculator evaluating row counts, null %, duplicate %, min/max bounds, column distributions, and freshness SLAs. | **COMPLETE** |
-| **AI Diagnostic Engine** | Structured reasoning engine processing anomalies (`OBSERVED → EVIDENCE → POSSIBLE ROOT CAUSES → CONFIDENCE → BLAST RADIUS → RECOMMENDED ACTION`). | **COMPLETE** |
-| **Policy Gate** | Safeguard engine enforcing `AUTO_FIX` for low-risk idempotent actions vs `ESCALATE` for high-risk anomalies (`SCHEMA_DRIFT`, `NULL_SPIKE`, `REFERENTIAL_BREAK`). | **COMPLETE** |
-| **Remediation & Verifier** | Executes deterministic deduplication / quarantine actions followed by post-fix verification assertions before marking incidents `RESOLVED`. | **COMPLETE** |
-
----
-
-## 3. Incident Lifecycle
+## Code layout
 
 ```
-DETECTED (Validation Assert Failure)
-   ↓
-SERIALIZED (Incident Report JSON & Markdown Created)
-   ↓
-DIAGNOSED (AI Engine & Historical Baseline Comparison)
-   ↓
-POLICY GATE EVALUATION
-   ├── LOW-RISK (DUPLICATE / STALENESS) → AUTO_FIX → REMEDIATION → VERIFICATION → RESOLVED
-   └── HIGH-RISK (SCHEMA / NULL / REF / DROP) → ESCALATE → HUMAN REVIEW → RESOLVED
+src/
+  ingestion/      # locate + stage raw batches for the Airflow logical date; fail loud on missing data
+  validation/      # schema.py (column/type contract), quality.py (row-count/null/duplicate/referential/
+                   #   freshness checks + the embedded duplicate-ingestion self-heal loop)
+  transformation/ # dedupe, normalize, derive KPIs -> aggregated_metrics
+  remediation/     # executor.py (deterministic dedupe), verifier.py (independent post-fix re-check)
+  agent/           # policy_gate.py, diagnosis_engine.py (rule-based), ollama_adapter.py (primary AI),
+                   #  incident.py (model), profiler.py, logger.py
+  database/        # schema.py (DDL), loader.py (writes), queries.py (reads, used by the backend)
+  monitoring/      # agent_monitoring: computes the real final run status
+airflow/dags/self_healing_pipeline.py   # thin task wiring only — imports from src/
 ```
+
+## DAG
+
+```
+ingest_dimensions ─┐
+ingest_orders ──────┼──> validate_schema ──> validate_quality ──> transform_data ──> load_data ──> agent_monitoring
+ingest_events ─────┘
+```
+
+Retries: 2, 2-minute delay, on every task. `on_failure_callback=on_task_failure` on every task (true-failure path: diagnoses and records an incident, escalates for human review — it never auto-remediates).
+
+## Self-healing design
+
+Airflow's `PythonOperator` model makes it awkward to resume a downstream task automatically after a mid-DAG fix, so self-healing for `DUPLICATE_INGESTION` is embedded **inside** `validate_quality` itself:
+
+1. Duplicate `order_id`s detected -> build evidence -> `OllamaDiagnosticAdapter.analyze_incident()` (Ollama primary, rule-based fallback).
+2. `PolicyGate.evaluate()` — the sole authority on AUTO_FIX vs ESCALATE. Only `DUPLICATE_INGESTION` (and the symmetric `VOLUME_ANOMALY_SPIKE`) are `LOW risk + idempotent`, so only those can ever get `AUTO_FIX`.
+3. If `AUTO_FIX`: `RemediationExecutor.deduplicate_dataset()` -> `RemediationVerifier.verify()` re-reads the file independently and only then flags it verified.
+4. If verified, `validate_quality` re-checks the in-memory frame and returns normally — Airflow sees a real task success, not a hidden failure.
+5. Every other fault category (`SCHEMA_DRIFT`, `NULL_SPIKE`, `VOLUME_ANOMALY_DROP`, `REFERENTIAL_BREAK`, `STALENESS`) is `ESCALATE`-only by policy — the task raises for real and the DAG run fails, which is the correct, safe outcome.
+
+Every incident (healed or escalated) is persisted as JSON+Markdown under `data/incidents/reports/` and mirrored into the `incidents` Postgres table.
+
+## Database
+
+`load_data` is the hard boundary for "database unavailable -> clear failure": if Postgres can't be reached, this task raises and the run fails — it never silently succeeds with stale/fake data. `agent_monitoring` computes the real final status (`HEALTHY` if no incident this run, `RECOVERED` if an incident was auto-fixed and verified this run) and writes it to `pipeline_runs`.
+
+## Idempotent staging
+
+Ingestion stages a partition once per logical date and **preserves** an existing staged file rather than re-copying from raw. This is what lets a fault injected directly into staging survive the ingestion tasks that run ahead of `validate_quality` in the same DAG run.

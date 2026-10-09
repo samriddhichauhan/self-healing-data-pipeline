@@ -79,17 +79,6 @@ datasets:
     freshness_sla:
       max_delay_hours: 6
 
-# BigQuery target dataset — fill in during setup (see gcp-setup/GCP_SETUP.md)
-bigquery:
-  project_id: "<YOUR_GCP_PROJECT_ID>"
-  dataset: "pipeline_intern_<INTERN_HANDLE>"
-  location: "US"
-  tables:
-    customers: "dim_customers"
-    products: "dim_products"
-    orders: "fct_orders"      # partition by order_ts (DAY), cluster by customer_id
-    events: "fct_events"      # partition by event_ts (DAY), cluster by customer_id
-
 agent:
   # Which fault categories are eligible for auto-remediation vs must escalate.
   # Interns should propose/justify their own version of this table in their

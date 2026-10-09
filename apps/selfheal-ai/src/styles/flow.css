@@ -1,0 +1,56 @@
+/* Vertical pipeline flow: one node per stage, connectors between them. */
+.flow { display: flex; flex-direction: column; }
+.fnode {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; align-items: center; text-align: left; width: 100%;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer;
+  transition: border-color 0.14s, box-shadow 0.14s, background 0.14s, transform 0.14s; animation: fade-up 0.3s var(--ease) both; position: relative;
+}
+.fnode:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.fnode.selected { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); }
+.fnode-icon { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-3); color: var(--muted); }
+.fnode.st-success .fnode-icon { background: var(--success-soft); color: var(--success); }
+.fnode.st-recovered .fnode-icon { background: var(--success-soft); color: var(--success); }
+.fnode.st-running .fnode-icon { background: var(--info-soft); color: var(--info); }
+.fnode.st-failed .fnode-icon { background: var(--danger-soft); color: var(--danger); }
+.fnode.st-warning .fnode-icon { background: var(--warning-soft); color: var(--warning); }
+.fnode.st-running { border-color: var(--info-line); }
+.fnode.st-failed { border-color: var(--danger-line); }
+.fnode.st-pending, .fnode.st-skipped { background: var(--surface-2); }
+.fnode.st-pending .fnode-title, .fnode.st-skipped .fnode-title { color: var(--muted); }
+.fnode-title { font-weight: 650; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.fnode-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.fnode-meta .mono { font-size: 11px; }
+.fnode-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.fnode-dur { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+
+/* AI stage gets primary emphasis. */
+.fnode.ai { border-color: var(--primary-line); background: linear-gradient(0deg, var(--primary-soft), var(--primary-soft)), var(--surface); }
+.fnode.ai .fnode-icon { background: var(--primary); color: var(--on-primary); }
+.fnode.ai.st-pending .fnode-icon, .fnode.ai.st-skipped .fnode-icon { background: var(--primary-soft-2); color: var(--primary); }
+.ai-tag { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 4px; background: var(--primary); color: var(--on-primary); }
+.ai-tag.fallback { background: var(--warning-dot); color: #1c1203; }
+.ai-tag.idle { background: var(--primary-soft-2); color: var(--primary); }
+
+.fconn { height: 22px; margin-left: 28px; width: 12px; display: flex; justify-content: center; }
+.fconn svg { width: 12px; height: 22px; overflow: visible; }
+.fconn path { stroke: var(--border-strong); stroke-width: 2; fill: none; stroke-linecap: round; }
+.fconn.done path { stroke: color-mix(in srgb, var(--success-dot) 70%, var(--border-strong)); }
+.fconn.active path { stroke: var(--info-dot); stroke-dasharray: 3 4; animation: dash 0.7s linear infinite; }
+.fconn.failed path { stroke: var(--danger-dot); }
+
+.flow-layout { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(0, 1.25fr); gap: 14px; align-items: start; }
+.flow-detail { position: sticky; top: calc(var(--topbar-h) + 14px); }
+@media (max-width: 1180px) { .flow-layout { grid-template-columns: minmax(0, 1fr); } .flow-detail { position: static; } }
+
+/* Mini horizontal stepper (dashboard / live monitoring) */
+.stepper { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; }
+.step { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.step-bar { height: 5px; border-radius: 999px; background: var(--surface-3); }
+.step.st-success .step-bar, .step.st-recovered .step-bar { background: var(--success-dot); }
+.step.st-running .step-bar { background: var(--info-dot); background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.25) 0 6px, transparent 6px 12px); background-size: 24px 100%; animation: progress 0.8s linear infinite; }
+.step.st-failed .step-bar { background: var(--danger-dot); }
+.step.st-warning .step-bar { background: var(--warning-dot); }
+.step.st-skipped .step-bar { background: repeating-linear-gradient(90deg, var(--border-strong) 0 4px, transparent 4px 7px); }
+.step-label { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step.st-running .step-label, .step.st-failed .step-label { color: var(--text); font-weight: 600; }
+@media (max-width: 760px) { .stepper { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 10px; } }

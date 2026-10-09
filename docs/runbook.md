@@ -1,64 +1,61 @@
-# Operations & Self-Healing Runbook — Data Engineering Platform
+# Runbook
 
-This operational runbook documents the architecture, diagnostic logic, Policy Gate rules, auto-remediation procedures, and troubleshooting workflows for the Self-Healing Data Pipeline.
+## Start everything
 
----
-
-## 1. Environment & Architecture Overview
-
-* **Orchestration**: Apache Airflow DAG (`self_healing_pipeline`) with 5 TaskGroups (`ingestion`, `validation`, `transformation`, `load`, `monitoring`).
-* **API Backend**: FastAPI service running at `http://localhost:8000`.
-* **Frontend**: React + Vite pipeline dashboard running at `http://localhost:5173`.
-* **Agent System**: 5-stage diagnostic reasoning engine with local Ollama LLM primary adapter (`apps/agent/agent/diagnosis/ollama_adapter.py`) and deterministic rule-based fallback (`apps/agent/agent/diagnosis/engine.py`).
-* **AI Runtime Connectivity**: Airflow containers connect to host Ollama instance via `http://host.docker.internal:11434` with model `llama3.2:latest`.
-
----
-
-## 2. Policy Gate Decision Matrix
-
-| Fault Category | Severity | Policy Action | Rationale | Remediation Executed |
-| :--- | :---: | :---: | :--- | :--- |
-| **`DUPLICATE_INGESTION`** | `MEDIUM` | **`AUTO_FIX`** | Idempotent deduplication by primary key is safe and deterministic. | `RemediationExecutor.deduplicate_dataset` |
-| **`VOLUME_ANOMALY_SPIKE`**| `MEDIUM` | **`AUTO_FIX`** | Duplication spikes are resolved via primary key deduplication. | `RemediationExecutor.deduplicate_dataset` |
-| **`SCHEMA_DRIFT`** | `HIGH` | **`ESCALATE`** | Altered data types require schema migration and engineering review. | Human Escalation |
-| **`NULL_SPIKE`** | `HIGH` | **`ESCALATE`** | Non-nullable key nulls indicate upstream database extraction failure. | Human Escalation |
-| **`VOLUME_ANOMALY_DROP`** | `HIGH` | **`ESCALATE`** | Missing records suggest upstream job truncation or network loss. | Human Escalation |
-| **`REFERENTIAL_BREAK`** | `HIGH` | **`ESCALATE`** | Foreign key orphans require dimension synchronization. | Human Escalation |
-| **`STALENESS`** | `MEDIUM` | **`ESCALATE`** | Freshness SLA breach requires upstream cron inspection. | Human Escalation |
-
----
-
-## 3. Diagnostic & Auto-Healing Sequence
-
-```
-1. Task Failure -> Airflow on_task_failure Callback
-2. Incident Serialization -> data/incidents/reports/inc_*.json
-3. AI Diagnostic Reasoning -> Hypothesis, Confidence, Blast Radius
-4. Policy Gate Safeguard -> AUTO_FIX or ESCALATE
-5. If AUTO_FIX -> RemediationExecutor -> Verification -> Pipeline Continued
-6. If ESCALATE -> Incident Marked PENDING_HUMAN_REVIEW -> Safe Stop
-```
-
----
-
-## 4. Operational Commands & Diagnostic Verification
-
-### Execute Automated 5-Case Test Harness
 ```bash
-python scripts/test_pipeline_5_cases.py
+docker compose up -d
+docker compose ps        # all services should show healthy/running
 ```
 
-### Execute System Health Diagnostic
+Services: `postgres`, `airflow-webserver` (:8080, user/pass `airflow`/`airflow`), `airflow-scheduler`, `backend` (:8000), `frontend` (:5173).
+
+## Verify the environment
+
 ```bash
-python scripts/check_airflow_health.py
+python scripts/verify_environment.py
 ```
 
-### Verify DAG Lineage & Task Configuration
+## Run the two manager demos
+
 ```bash
-python scripts/verify_airflow_dag.py
+python scripts/demo_healthy_run.py
+python scripts/demo_self_healing_run.py
 ```
 
-### Run Full Test Suite
+Both trigger a real DAG run inside the Airflow container, poll the real scheduler, and independently verify results via `airflow tasks states-for-dag-run` and the `pipeline` Postgres database. Neither ever marks a task successful manually or fabricates output.
+
+## Reset demo state
+
 ```bash
+python scripts/reset_demo.py
+```
+
+Clears `data/staging/`, `data/processed/`, and incident/status files. Regenerates the canonical `data/raw/` dataset only if it's missing — it never overwrites an intact canonical fixture.
+
+## Inspect a specific run
+
+```bash
+docker exec <scheduler-container> airflow dags list-runs -d self_healing_pipeline
+docker exec <scheduler-container> airflow tasks states-for-dag-run self_healing_pipeline <RUN_ID>
+docker exec <scheduler-container> find /opt/airflow/logs/dag_id=self_healing_pipeline/run_id=<RUN_ID> -type f
+```
+
+(Find the container name with `docker ps --filter label=com.docker.compose.service=airflow-scheduler`.)
+
+## Recovering from a restart
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+Postgres data persists in the `postgres-db-volume` named volume. Schema (both Airflow's and the pipeline's `pipeline` database + tables) is created idempotently — no manual repair needed.
+
+## Tests
+
+```bash
+pip install -r requirements.txt
 pytest
 ```
+
+Tests that need the real Postgres `pipeline` database (`tests/test_database.py`, some of `tests/test_pipeline_scenarios.py` and `tests/integration/test_backend_api.py`) auto-skip if it isn't reachable; run `docker compose up -d postgres` first to exercise them for real.

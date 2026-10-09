@@ -1,0 +1,169 @@
+/* ------------------------------------------------------------------
+   SelfHeal AI design tokens.
+   Light: white surfaces, navy text, blue brand.
+   Dark: a separately tuned deep-navy palette (not an inversion).
+   ------------------------------------------------------------------ */
+:root {
+  color-scheme: light;
+
+  --bg: #f5f7fb;
+  --bg-elevated: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --surface-3: #f0f3f8;
+  --hover: #f3f6fb;
+  --border: #e3e8f0;
+  --border-strong: #cfd7e3;
+  --divider: #edf1f6;
+
+  --text: #0b1a33;
+  --text-2: #334560;
+  --muted: #62718a;
+  --faint: #93a1b5;
+
+  --primary: #1d4ed8;
+  --primary-hover: #1e40af;
+  --primary-strong: #1e3a8a;
+  --primary-soft: #eef4ff;
+  --primary-soft-2: #dbe7ff;
+  --primary-line: #bcd0fb;
+  --on-primary: #ffffff;
+  --focus: rgba(37, 99, 235, 0.28);
+
+  --success: #047857;
+  --success-dot: #10b981;
+  --success-soft: #ecfdf5;
+  --success-line: #b5ecd3;
+  --warning: #b45309;
+  --warning-dot: #f59e0b;
+  --warning-soft: #fffbeb;
+  --warning-line: #fbe2a4;
+  --danger: #c02626;
+  --danger-dot: #ef4444;
+  --danger-soft: #fef2f2;
+  --danger-line: #fbcaca;
+  --info: #1d4ed8;
+  --info-dot: #3b82f6;
+  --info-soft: #eff5ff;
+  --info-line: #c7dafc;
+  --neutral: #52627a;
+  --neutral-dot: #94a3b8;
+  --neutral-soft: #f1f4f8;
+  --neutral-line: #dfe5ed;
+  --violet: #6d28d9;
+  --violet-soft: #f4f0ff;
+
+  --sidebar-bg: #ffffff;
+  --sidebar-text: #3b4b64;
+  --sidebar-active-bg: #eef4ff;
+  --sidebar-active-text: #1d4ed8;
+  --topbar-bg: rgba(255, 255, 255, 0.9);
+
+  --term-bg: #0b1324;
+  --term-surface: #0f1a30;
+  --term-border: #1c2a45;
+  --term-text: #d5deec;
+  --term-muted: #6f84a6;
+
+  --chart-grid: #e8edf4;
+  --chart-axis: #6b7a91;
+  --chart-1: #2563eb;
+  --chart-2: #1e3a8a;
+  --chart-3: #38bdf8;
+  --chart-ok: #10b981;
+  --chart-bad: #ef4444;
+  --chart-warn: #f59e0b;
+  --chart-muted: #a3b1c4;
+
+  --shadow-xs: 0 1px 1px rgba(11, 26, 51, 0.04);
+  --shadow-sm: 0 1px 2px rgba(11, 26, 51, 0.06);
+  --shadow-md: 0 4px 12px rgba(11, 26, 51, 0.08);
+  --shadow-lg: 0 18px 44px rgba(11, 26, 51, 0.16), 0 2px 6px rgba(11, 26, 51, 0.06);
+  --overlay: rgba(9, 18, 36, 0.42);
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 10px;
+
+  --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
+  --sidebar-w: 244px;
+  --sidebar-w-collapsed: 64px;
+  --topbar-h: 56px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #060b16;
+  --bg-elevated: #0b1322;
+  --surface: #0c1526;
+  --surface-2: #0f1a2e;
+  --surface-3: #132038;
+  --hover: #122036;
+  --border: #1b2a44;
+  --border-strong: #26395a;
+  --divider: #16233a;
+
+  --text: #e7eefb;
+  --text-2: #b8c6de;
+  --muted: #8494b0;
+  --faint: #5c6d8b;
+
+  --primary: #3b82f6;
+  --primary-hover: #60a5fa;
+  --primary-strong: #93c5fd;
+  --primary-soft: rgba(59, 130, 246, 0.12);
+  --primary-soft-2: rgba(59, 130, 246, 0.2);
+  --primary-line: rgba(96, 165, 250, 0.35);
+  --on-primary: #ffffff;
+  --focus: rgba(96, 165, 250, 0.35);
+
+  --success: #34d399;
+  --success-dot: #10b981;
+  --success-soft: rgba(16, 185, 129, 0.12);
+  --success-line: rgba(52, 211, 153, 0.3);
+  --warning: #fbbf24;
+  --warning-dot: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --warning-line: rgba(251, 191, 36, 0.3);
+  --danger: #f87171;
+  --danger-dot: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.13);
+  --danger-line: rgba(248, 113, 113, 0.32);
+  --info: #60a5fa;
+  --info-dot: #3b82f6;
+  --info-soft: rgba(59, 130, 246, 0.13);
+  --info-line: rgba(96, 165, 250, 0.32);
+  --neutral: #9aa8c0;
+  --neutral-dot: #64748b;
+  --neutral-soft: rgba(148, 163, 184, 0.1);
+  --neutral-line: rgba(148, 163, 184, 0.22);
+  --violet: #a78bfa;
+  --violet-soft: rgba(139, 92, 246, 0.14);
+
+  --sidebar-bg: #08101f;
+  --sidebar-text: #a4b3cc;
+  --sidebar-active-bg: rgba(59, 130, 246, 0.14);
+  --sidebar-active-text: #93c5fd;
+  --topbar-bg: rgba(8, 14, 27, 0.86);
+
+  --term-bg: #050a14;
+  --term-surface: #0a1222;
+  --term-border: #1a2742;
+
+  --chart-grid: #18263e;
+  --chart-axis: #7f90ad;
+  --chart-1: #3b82f6;
+  --chart-2: #93c5fd;
+  --chart-3: #22d3ee;
+  --chart-muted: #475a7a;
+
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 22px 56px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(59, 130, 246, 0.08);
+  --overlay: rgba(2, 6, 14, 0.62);
+}

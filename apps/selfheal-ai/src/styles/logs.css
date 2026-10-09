@@ -1,0 +1,62 @@
+.logview { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }
+.log-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.log-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.log-count { margin-left: auto; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.marker-chip {
+  --c: var(--muted);
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 5px; cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 650; letter-spacing: 0.02em; color: var(--c);
+  border: 1px solid color-mix(in srgb, var(--c) 32%, transparent); background: var(--surface); transition: all 0.14s;
+}
+.marker-chip .count { font-family: var(--font); font-weight: 700; font-size: 10.5px; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--c) 14%, transparent); }
+.marker-chip:hover, .marker-chip.on { background: color-mix(in srgb, var(--c) 12%, var(--surface)); border-color: var(--c); }
+.sev-chip { --c: var(--muted); }
+
+.m-req { --c: #0ea5e9; }
+.m-res { --c: #3b82f6; }
+.m-diag { --c: #6366f1; }
+.m-policy { --c: #8b5cf6; }
+.m-heal { --c: #10b981; }
+.m-fallback { --c: #f59e0b; }
+.m-error { --c: #ef4444; }
+.s-info { --c: #3b82f6; }
+.s-success { --c: #10b981; }
+.s-warning { --c: #f59e0b; }
+.s-error { --c: #ef4444; }
+
+.terminal { background: var(--term-bg); color: var(--term-text); font-family: var(--mono); font-size: 12px; line-height: 1.65; height: min(62vh, 680px); overflow: auto; padding: 6px 0; }
+.terminal.compact { height: 340px; }
+.ln { display: grid; grid-template-columns: 18px 44px 170px 70px minmax(0, 1fr); gap: 8px; padding: 0 12px 0 4px; border-left: 3px solid transparent; }
+.ln:hover { background: rgba(255, 255, 255, 0.035); }
+.ln.expandable { cursor: pointer; }
+.ln-exp { color: #4c5f82; display: grid; place-items: center; height: 20px; }
+.ln-no { color: #3a4d70; text-align: right; user-select: none; }
+.ln-ts { color: var(--term-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ln-sev { font-weight: 700; font-size: 10.5px; letter-spacing: 0.04em; padding-top: 1px; }
+.ln-sev.info { color: #7ea6e0; }
+.ln-sev.success { color: #34d399; }
+.ln-sev.warning { color: #fbbf24; }
+.ln-sev.error { color: #f87171; }
+.terminal:not(.wrap) .ln-msg { white-space: pre; }
+.terminal.wrap .ln-msg { white-space: pre-wrap; word-break: break-word; }
+.terminal:not(.wrap) .ln { width: max-content; min-width: 100%; }
+.ln-tag { display: inline-block; font-size: 10px; font-weight: 750; padding: 0 5px; border-radius: 3px; margin-right: 8px; color: #06101f; background: var(--c); letter-spacing: 0.02em; vertical-align: 1px; }
+.ln[class*=" m-"] { border-left-color: var(--c); background: color-mix(in srgb, var(--c) 8%, transparent); }
+.ln.m-req .ln-msg { color: #7dd3fc; }
+.ln.m-res .ln-msg { color: #93c5fd; }
+.ln.m-diag .ln-msg { color: #c7d2fe; }
+.ln.m-policy .ln-msg { color: #ddd6fe; }
+.ln.m-heal .ln-msg { color: #6ee7b7; }
+.ln.m-fallback .ln-msg { color: #fcd34d; }
+.ln.m-error .ln-msg { color: #fca5a5; }
+.ln-children { padding: 0 0 4px 0; }
+.ln-child { display: grid; grid-template-columns: 18px 44px 170px 70px minmax(0, 1fr); gap: 8px; padding: 0 12px 0 4px; border-left: 3px solid transparent; color: #aab8d0; }
+.ln-child .ln-msg { opacity: 0.92; }
+.ln-more { color: var(--term-muted); font-size: 11px; margin-left: 8px; }
+.terminal mark { background: #fde047; color: #111827; border-radius: 2px; padding: 0 1px; }
+.term-empty { color: var(--term-muted); padding: 28px; text-align: center; font-family: var(--font); }
+.term-paused { position: sticky; top: 0; z-index: 2; background: #422006; color: #fcd34d; font-family: var(--font); font-size: 12px; padding: 4px 12px; border-bottom: 1px solid #713f12; }
+@media (max-width: 760px) {
+  .ln, .ln-child { grid-template-columns: 18px 36px minmax(0, 1fr); }
+  .ln-ts, .ln-sev { display: none; }
+}

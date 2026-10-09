@@ -1,0 +1,11 @@
+# Host-side dependencies for running pytest and the demo/ops scripts
+# directly on Windows (NOT for running Airflow itself — Airflow only ever
+# runs inside the Docker containers; see docker-compose.yml).
+pandas>=2.0.0
+pyyaml>=6.0
+pytest>=7.4.0
+psycopg2-binary>=2.9.0
+fastapi>=0.100.0
+uvicorn>=0.22.0
+httpx>=0.24.0
+pydantic>=2.0.0
