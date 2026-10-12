@@ -140,7 +140,7 @@ def build_pipeline(run: Dict[str, Any], tasks: List[Dict[str, Any]], incidents: 
         ))
         nodes.append(_node(
             "verification", "Verification", ver.get("check") or "primary_key_deduplication",
-            "success" if incident.get("verification_status") == "PASSED" else "failed",
+            {"PASSED": "success", "NOT_RUN": "skipped"}.get(incident.get("verification_status"), "failed"),
             "RemediationVerifier.verify", ended_at=incident.get("updated_at"),
             details=[("status", incident.get("verification_status")), ("duplicates", ver.get("duplicate_count")),
                      ("rows", ver.get("remaining_rows")), ("notes", ver.get("verification_notes"))],

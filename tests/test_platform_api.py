@@ -164,6 +164,23 @@ def test_pipeline_graph_recovered_healthy_and_escalated():
     assert en["outcome"]["status"] == "failed"
 
 
+@pytest.mark.parametrize("rem_status, ver_status, ver_node", [
+    ("CONFLICT", "NOT_RUN", "skipped"),
+    ("ROLLBACK_FAILED", "NOT_RUN", "skipped"),
+    ("ROLLED_BACK", "FAILED", "failed"),
+    ("FAILED", "NOT_RUN", "skipped"),
+    ("ROLLED_BACK", "NOT_RUN", "skipped"),
+    ("FAILED", None, "failed"),  # no recorded verification is never shown as success
+])
+def test_pipeline_graph_unsuccessful_remediation_and_verification_that_never_ran(rem_status, ver_status, ver_node):
+    """A verification that never ran is shown as skipped, not failed."""
+    inc = normalize_incident(_incident(status="ESCALATED", remediation_status=rem_status, verification_status=ver_status))
+    run = normalize_run({"dag_run_id": "e", "state": "failed"}, {"status": "FAILED"})
+    nodes = {n["key"]: n for n in build_pipeline(run, _tasks(quality="failed"), [inc], [])["nodes"]}
+    assert nodes["remediation"]["status"] == "failed"
+    assert nodes["verification"]["status"] == ver_node
+
+
 class FakeUpstream:
     """Records calls; answers like Airflow / the backend would."""
 

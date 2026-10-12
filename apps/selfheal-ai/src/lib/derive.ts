@@ -25,6 +25,10 @@ export function trend24h<T>(items: T[] | undefined, at: (t: T) => string | null 
 export const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
 // ---------- incidents ----------
+/** Remediation outcomes that did not fix the data. NOT_RUN is not a failure:
+ *  it means the step never ran (shown as skipped). */
+const FAILED_REMEDIATION = new Set(["FAILED", "CONFLICT", "ROLLED_BACK", "ROLLBACK_FAILED"]);
+
 export type IncidentFilter = "all" | "open" | "resolved" | "failed" | "auto-healed" | "escalated";
 
 export function incidentMatches(i: Incident, f: IncidentFilter): boolean {
@@ -34,7 +38,7 @@ export function incidentMatches(i: Incident, f: IncidentFilter): boolean {
     case "resolved": return i.status === "REMEDIATED";
     case "auto-healed": return i.status === "REMEDIATED" && i.policy_decision === "AUTO_FIX" && i.verification_status === "PASSED";
     case "escalated": return i.status === "ESCALATED";
-    case "failed": return i.remediation_status === "FAILED" || i.verification_status === "FAILED";
+    case "failed": return FAILED_REMEDIATION.has(i.remediation_status ?? "") || i.verification_status === "FAILED";
   }
 }
 

@@ -12,6 +12,8 @@ const TONES: Record<string, Tone> = {
   warning: "warning", degraded: "warning", escalated: "warning", escalate: "warning", up_for_retry: "warning",
   up_for_reschedule: "warning", medium: "warning", fallback: "warning", rule_based: "warning", rule_based_fallback: "warning",
   failed: "danger", offline: "danger", upstream_failed: "danger", high: "danger", critical: "danger", error: "danger", fail: "danger",
+  conflict: "danger", rolled_back: "danger", rollback_failed: "danger",
+  not_run: "neutral", skipped: "neutral",
   local_ollama_ai: "ai",
 };
 
@@ -22,6 +24,7 @@ export function toneOf(status?: string | null): Tone {
 const LABELS: Record<string, string> = {
   connected: "Online", upstream_failed: "Upstream failed", up_for_retry: "Up for retry", auto_fix: "AUTO_FIX",
   local_ollama_ai: "LOCAL_OLLAMA_AI", rule_based: "RULE_BASED", rule_based_fallback: "RULE_BASED_FALLBACK", escalate: "ESCALATE",
+  not_run: "SKIPPED",
 };
 
 export function StatusBadge({ status, label, pulse }: { status?: string | null; label?: string; pulse?: boolean }) {
