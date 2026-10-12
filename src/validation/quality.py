@@ -16,6 +16,7 @@ task/DAG run FAILED. That is the correct, safe outcome, not a bug to work
 around.
 """
 import os
+import json
 import random
 import pandas as pd
 from datetime import datetime, timezone
@@ -37,6 +38,37 @@ def _mirror_incident_to_db(diag_report):
         record_incident(diag_report)
     except Exception as db_err:
         print(f"[INCIDENT DB MIRROR SKIPPED] {db_err}")
+
+
+def _persist_incident(diag_report, report_dir) -> bool:
+    """Saves the incident report (required) and mirrors it to Postgres (best
+    effort). If the save fails, the record is marked with incident_report_error
+    (so the DB row shows the report is missing even after a successful retry),
+    written to the task log and still mirrored, and False is returned so the
+    caller fails the task."""
+    saved = True
+    try:
+        diag_report.save(report_dir)
+    except Exception as save_err:
+        saved = False
+        diag_report.incident_report_error = f"{type(save_err).__name__}: {save_err}"
+        print(f"[INCIDENT SAVE FAILED] {diag_report.incident_id}: {diag_report.incident_report_error}. "
+              f"Full incident record follows:")
+        print(json.dumps(diag_report.to_dict(), default=str))
+    _mirror_incident_to_db(diag_report)
+    return saved
+
+
+def _rollback_failure_reason(rollback) -> str:
+    """Escalation text that only claims what is known about the backup."""
+    path = rollback.get("backup_path")
+    backup = {
+        "verified": f"original preserved at {path} (checksum verified)",
+        "checksum_mismatch": f"backup at {path} failed checksum verification and cannot be trusted",
+        "missing": f"backup is missing at {path}",
+        "unreadable": f"backup at {path} could not be read",
+    }.get(rollback.get("backup_state"), f"state of the backup at {path} is unknown")
+    return f"Rollback failed ({rollback.get('error')}); {backup}."
 
 
 def validate_quality(**context):
@@ -122,30 +154,84 @@ def validate_quality(**context):
 
                 if gate_action == "AUTO_FIX":
                     executor = RemediationExecutor(data_dir=data_dir)
-                    fix_res = executor.deduplicate_dataset(dataset="orders", primary_key=pk, execution_date=execution_date)
+                    fix_res, verify_res, df_recheck, remediation_error = None, None, None, None
+                    try:
+                        fix_res = executor.deduplicate_dataset(
+                            dataset="orders", primary_key=pk, execution_date=execution_date, backup_id=incident_id,
+                        )
+                        if fix_res.get("status") == "SUCCESS":
+                            verifier = RemediationVerifier(data_dir=data_dir)
+                            verify_res = verifier.verify(dataset="orders", primary_key=pk, execution_date=execution_date)
+                            if verify_res.get("verified") is True and os.path.exists(orders_stg):
+                                df_recheck = pd.read_csv(orders_stg)
+                    except Exception as rem_err:
+                        remediation_error = f"{type(rem_err).__name__}: {rem_err}"
 
-                    verifier = RemediationVerifier(data_dir=data_dir)
-                    verify_res = verifier.verify(dataset="orders", primary_key=pk, execution_date=execution_date)
+                    # The incident is REMEDIATED only if all three agree: the
+                    # executor reports SUCCESS, the verifier passes, and an
+                    # independent re-read of staging shows zero duplicates.
+                    fix_status = (fix_res or {}).get("status")
+                    verified = verify_res is not None and verify_res.get("verified") is True
+                    recheck_clean = df_recheck is not None and not df_recheck[pk].duplicated().any()
+                    healed = remediation_error is None and fix_status == "SUCCESS" and verified and recheck_clean
 
-                    diag_report.remediation_status = "SUCCESS" if fix_res.get("status") == "SUCCESS" else "FAILED"
-                    diag_report.verification_status = "PASSED" if verify_res.get("verified") else "FAILED"
-                    diag_report.status = "REMEDIATED" if verify_res.get("verified") else "ESCALATED"
-                    diag_report.remediation = fix_res
+                    remediation_record = dict(fix_res or {"status": "FAILED"})
+                    if remediation_error:
+                        remediation_record["error"] = remediation_error
+
+                    if healed:
+                        diag_report.remediation_status = "SUCCESS"
+                        diag_report.verification_status = "PASSED"
+                    elif fix_status == "CONFLICT":
+                        # Staging was never modified and verification never ran.
+                        diag_report.remediation_status = "CONFLICT"
+                        diag_report.verification_status = "NOT_RUN"
+                        remediation_record["escalation_reason"] = fix_res.get("message")
+                    elif remediation_record.get("backup_path") and remediation_record.get("changed"):
+                        # This remediation changed staging: put the original back.
+                        # restore_backup refuses if staging no longer holds what
+                        # the remediation wrote, so later changes are never lost.
+                        try:
+                            rollback = executor.restore_backup(remediation_record)
+                        except Exception as rb_err:
+                            rollback = {"restored": False, "sha256_match": False, "backup_state": None,
+                                        "backup_path": remediation_record.get("backup_path"),
+                                        "error": f"{type(rb_err).__name__}: {rb_err}"}
+                        remediation_record["rollback"] = rollback
+                        diag_report.remediation_status = "ROLLED_BACK" if rollback["restored"] else "ROLLBACK_FAILED"
+                        diag_report.verification_status = "FAILED" if verify_res is not None else "NOT_RUN"
+                        remediation_record["escalation_reason"] = (
+                            "Remediation was not verified; original staged data restored and checksum confirmed."
+                            if rollback["restored"] else _rollback_failure_reason(rollback)
+                        )
+                    else:
+                        # Staging was not changed by this remediation; nothing to roll back.
+                        diag_report.remediation_status = "FAILED"
+                        diag_report.verification_status = "FAILED" if verify_res is not None else "NOT_RUN"
+                        remediation_record["escalation_reason"] = remediation_error or remediation_record.get("error") or remediation_record.get("message")
+
+                    diag_report.status = "REMEDIATED" if healed else "ESCALATED"
+                    diag_report.remediation = remediation_record
                     diag_report.verification = verify_res
-                    diag_report.save(report_dir)
-                    _mirror_incident_to_db(diag_report)
+                    incident_saved = _persist_incident(diag_report, report_dir)
 
-                    if verify_res.get("verified"):
-                        if os.path.exists(orders_stg):
-                            df_orders = pd.read_csv(orders_stg)
-                        if not df_orders[pk].duplicated().any():
-                            auto_healed = True
-                            print(f"[SELF-HEALING SUCCESS] {incident_id}: DUPLICATE_INGESTION auto-fixed and verified "
-                                  f"({fix_res.get('removed_duplicates')} removed, {len(df_orders)} rows, 0 duplicates). Continuing downstream.")
+                    # The task only continues once the fix is verified AND recorded.
+                    if healed and incident_saved:
+                        auto_healed = True
+                        df_orders = df_recheck
+                        print(f"[SELF-HEALING SUCCESS] {incident_id}: DUPLICATE_INGESTION auto-fixed and verified "
+                              f"({fix_res.get('removed_duplicates')} removed, {len(df_orders)} rows, 0 duplicates). Continuing downstream.")
+                    elif healed:
+                        print(f"[SELF-HEALING UNRECORDED] {incident_id}: fix verified but the incident report could not be "
+                              f"saved; failing the task. Original kept at {fix_res.get('backup_path')}.")
+                    elif diag_report.remediation_status == "ROLLBACK_FAILED":
+                        print(f"[ROLLBACK FAILED] {incident_id}: {remediation_record['escalation_reason']} Manual repair required.")
+                    else:
+                        print(f"[SELF-HEALING FAILED] {incident_id}: remediation={diag_report.remediation_status} "
+                              f"verification={diag_report.verification_status}. {remediation_record.get('escalation_reason') or ''} Escalating.")
                 else:
                     diag_report.status = "ESCALATED"
-                    diag_report.save(report_dir)
-                    _mirror_incident_to_db(diag_report)
+                    _persist_incident(diag_report, report_dir)
             except Exception as heal_err:
                 print(f"[SELF-HEALING ERROR] {heal_err}")
 

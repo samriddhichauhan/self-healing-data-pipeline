@@ -35,6 +35,9 @@ class IncidentReport:
     verification_status: str = "PENDING"
     recovery_time: Optional[float] = None
     run_id: Optional[str] = None
+    # Set when this report could not be saved to report_dir; kept separate
+    # from remediation/verification status, which record what really happened.
+    incident_report_error: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
